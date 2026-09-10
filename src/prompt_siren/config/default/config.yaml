@@ -50,6 +50,8 @@ trajectory_labeling:
   attack_chain_judge_schema_version: v2 # BERTopic-retrieved chronological message-chain schema
   attack_chain_judge_model: null # Optional dedicated judge; null reuses the tested agent model
   attack_chain_judge_max_attempts: 3 # Retries for valid structured chain extraction
+  attack_chain_codebook_path: null # Set a Markdown Thought/Action codebook to enable automatic coding
+  attack_chain_codebook_batch_size: 8 # Agent messages labeled per LLM request
   attack_chain_judge_max_output_tokens: 4096 # Compact v2 message-selection output cap
   attack_chain_judge_recall_priority: false # Over-inclusive open-coding prompt; false keeps the compact default
   attack_chain_judge_semantic_precision: false # Slightly tighter causal prompt for judges such as Luna

@@ -97,6 +97,11 @@ class TrajectoryLabelingConfig(BaseModel):
         ge=1,
         description="Maximum attempts to obtain a valid evidence-grounded attack chain.",
     )
+    attack_chain_codebook_path: str | None = Field(
+        default=None,
+        description="Markdown Thought/Action codebook; null disables post-extraction coding.",
+    )
+    attack_chain_codebook_batch_size: int = Field(default=8, ge=1)
     attack_chain_judge_max_output_tokens: int = Field(
         default=4096,
         ge=1,

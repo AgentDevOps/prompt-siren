@@ -45,3 +45,4 @@ open_coding/
 *.sh
 docs/labeling
 tests/
+truncated/

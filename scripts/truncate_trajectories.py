@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -18,6 +20,169 @@ from prompt_siren.trajectory_labeling import label_trajectory, LEVEL_RANK, LEVEL
 
 CutSource = Literal["first_occurrence", "first_reach"]
 PayloadMatch = Literal["content", "vector_id", "content_or_vector_id"]
+
+
+def code_key(value: str) -> str:
+    return value.strip().removesuffix(".").strip()
+
+
+def markdown_code_labels(text: str) -> list[dict[str, Any]]:
+    """Read headings and labels outside fences, never commands embedded in a message."""
+    labels: dict[int, dict[str, Any]] = {}
+    index: int | None = None
+    fence: str | None = None
+    for line in text.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                if not line.strip()[len(marker[1]) :].strip():
+                    fence = None
+            continue
+        if marker:
+            fence = marker[1]
+            continue
+        heading = re.fullmatch(r"## Message (\d+)\s*", line)
+        if heading:
+            index = int(heading[1])
+        label = re.fullmatch(r"- (Thought|Action) Code:\s*(.+)", line)
+        if label and index is not None:
+            entry = labels.setdefault(index, {"message_index": index})
+            key = label[1].lower() + "_code"
+            if key in entry:
+                raise ValueError(f"Duplicate {key} for message {index}")
+            entry[key] = label[2].strip()
+    return list(labels.values())
+
+
+def load_code_labels(
+    execution_path: Path,
+    messages: list[dict[str, Any]],
+    source: str = "auto",
+) -> tuple[list[dict[str, Any]], Path]:
+    names = (
+        [
+            "attack_chain_labeled.json",
+            "attack_chain_judge.json",
+            "attack_chain_labeled.md",
+            "attack_chain_judge.md",
+        ]
+        if source == "auto"
+        else [source]
+    )
+    for name in names:
+        path = execution_path.with_name(name)
+        if not path.is_file():
+            continue
+        if path.suffix == ".json":
+            payload = load_json(path)
+            coding = payload.get("codebook_labeling")
+            if coding is None and source == "auto":
+                continue
+            if not isinstance(coding, dict) or coding.get("status") != "completed":
+                raise ValueError(f"No completed codebook labeling in {path}")
+            entries = coding.get("labels")
+        else:
+            entries = markdown_code_labels(path.read_text(encoding="utf-8"))
+        if not isinstance(entries, list):
+            raise ValueError(f"Expected labels list in {path}")
+        seen: set[int] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError(f"Invalid code label in {path}")
+            index = entry.get("message_index")
+            if type(index) is not int or not 0 <= index < len(messages) or index in seen:
+                raise ValueError(f"Invalid or duplicate message_index in {path}: {index}")
+            if messages[index].get("kind") != "response":
+                raise ValueError(f"Code label does not refer to an agent response: {index}")
+            for key in ("thought_code", "action_code"):
+                if not isinstance(entry.get(key), str) or not code_key(entry[key]):
+                    raise ValueError(f"Missing {key} for message {index} in {path}")
+            seen.add(index)
+        return sorted(entries, key=lambda entry: entry["message_index"]), path
+    raise FileNotFoundError(f"No code labels found next to {execution_path}")
+
+
+def truncate_by_codes(
+    execution_path: Path,
+    *,
+    execution: dict[str, Any],
+    result: dict[str, Any] | None,
+    thought_codes: list[str],
+    action_codes: list[str],
+    source: str,
+    occurrence: int,
+    include_trigger: bool,
+    output_dir: Path | None,
+    resume_job_dir: Path | None,
+    root: Path,
+) -> list[dict[str, Any]]:
+    if occurrence < 1:
+        raise ValueError("occurrence must be at least 1")
+    messages = execution.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError(f"Expected messages list in {execution_path}")
+    labels, label_path = load_code_labels(execution_path, messages, source)
+    records = []
+    targets = list(
+        dict.fromkeys(
+            [("thought", code_key(c)) for c in thought_codes]
+            + [("action", code_key(c)) for c in action_codes]
+        )
+    )
+    for kind, code in targets:
+        if not code:
+            raise ValueError("Target code must not be empty")
+        matches = [entry for entry in labels if code_key(entry[kind + "_code"]) == code]
+        record = {
+            "source_execution_path": str(execution_path),
+            "method": "codebook",
+            "code_kind": kind,
+            "target_code": code,
+            "occurrence": occurrence,
+            "label_source": str(label_path),
+            "include_trigger_message": include_trigger,
+        }
+        if len(matches) < occurrence:
+            records.append(
+                record | {"status": "missing_code_occurrence", "match_count": len(matches)}
+            )
+            continue
+        index = matches[occurrence - 1]["message_index"]
+        keep_count = kept_message_count(index, include_trigger)
+        # Slice the ORIGINAL message list; never slice parts or the rendered Markdown.
+        truncated = truncate_execution(execution, keep_count=keep_count)
+        record.update(
+            {
+                "trigger_message_index": index,
+                "kept_message_count": keep_count,
+                "original_message_count": len(messages),
+                "status": "planned",
+            }
+        )
+        truncated_result = truncate_result(
+            result,
+            execution=execution,
+            trajectory_level=None,
+            keep_count=keep_count,
+            source_execution_path=execution_path,
+            truncation=record,
+        )
+        digest = hashlib.sha256(code.encode()).hexdigest()[:12]
+        boundary = "after" if include_trigger else "before"
+        suffix = f"code_{kind}_{digest}_occurrence_{occurrence}_{boundary}"
+        records.append(
+            write_truncated_record(
+                record=record,
+                truncated_execution=truncated,
+                truncated_result=truncated_result,
+                output_dir=output_dir,
+                resume_job_dir=resume_job_dir,
+                root=root,
+                execution_path=execution_path,
+                suffix=suffix,
+            )
+        )
+    return records
 
 
 def is_probably_execution_file(path: Path) -> bool:
@@ -154,11 +319,7 @@ def attack_payload_texts(attacks: Any, match: PayloadMatch) -> list[str]:
         if not isinstance(content, str) or not content:
             continue
         needles.append(content)
-        needles.extend(
-            line.strip()
-            for line in content.splitlines()
-            if len(line.strip()) >= 32
-        )
+        needles.extend(line.strip() for line in content.splitlines() if len(line.strip()) >= 32)
 
     return sorted(dict.fromkeys(needles), key=len, reverse=True)
 
@@ -261,7 +422,7 @@ def truncate_result(
     result: dict[str, Any] | None,
     *,
     execution: dict[str, Any],
-    trajectory_level: UptakeLevel,
+    trajectory_level: UptakeLevel | None,
     keep_count: int,
     source_execution_path: Path,
     truncation: dict[str, Any],
@@ -315,9 +476,38 @@ def resume_ready_run_dir(
 def ensure_resume_job_config(resume_job_dir: Path, execution_path: Path) -> Path:
     source_config = find_job_config_path(execution_path)
     if source_config is None:
-        raise FileNotFoundError(f"Could not find source {CONFIG_FILENAME} for {execution_path}")
+        # Curated label directories may have lost their original job config.
+        # Match the complete execution evidence, not just the short run ID.
+        source = load_json(execution_path)
+        candidates: list[Path] = []
+        for parent in execution_path.resolve().parents:
+            if parent.name != "jobs":
+                continue
+            for candidate in parent.glob(f"**/{execution_path.parent.name}/execution.json"):
+                config = find_job_config_path(candidate)
+                if config is None:
+                    continue
+                other = load_json(candidate)
+                if other.get("task_id") == source.get("task_id") and other.get(
+                    "messages"
+                ) == source.get("messages"):
+                    candidates.append(config)
+            break
+        if candidates:
+            if len({config.read_bytes() for config in candidates}) != 1:
+                raise ValueError(
+                    "Matching original jobs have different configs; use the original job as input"
+                )
+            source_config = sorted(candidates)[0]
+    if source_config is None:
+        raise FileNotFoundError(
+            f"Could not find source {CONFIG_FILENAME} for {execution_path}; "
+            "use an original job with config.yaml as input"
+        )
 
     target_config = resume_job_dir / CONFIG_FILENAME
+    if target_config.exists() and target_config.read_bytes() != source_config.read_bytes():
+        raise ValueError(f"Refusing to mix different job configs in {resume_job_dir}")
     target_config.parent.mkdir(parents=True, exist_ok=True)
     if not target_config.exists():
         shutil.copy2(source_config, target_config)
@@ -342,11 +532,24 @@ def write_truncated_record(
             execution_path=execution_path,
             suffix=suffix,
         )
-        dump_json(run_dir / "execution.json", truncated_execution)
-        dump_json(run_dir / "result.json", truncated_result)
-        record["status"] = "written"
-        record["output_execution_path"] = str(run_dir / "execution.json")
-        record["output_result_path"] = str(run_dir / "result.json")
+        if (run_dir / "execution.json").exists() or (run_dir / "result.json").exists():
+            raise ValueError(f"Legacy flat output exists in {run_dir}; choose a new --output-dir")
+        ensure_resume_job_config(run_dir, execution_path)
+        checkpoint_dir = resume_ready_run_dir(
+            resume_job_dir=run_dir,
+            execution=truncated_execution,
+            execution_path=execution_path,
+            suffix=suffix,
+        )
+        if checkpoint_dir.exists():
+            raise FileExistsError(f"Refusing to overwrite existing checkpoint: {checkpoint_dir}")
+        checkpoint = copy.deepcopy(truncated_execution)
+        checkpoint["run_id"] = checkpoint_dir.name
+        dump_json(checkpoint_dir / "execution.json", checkpoint)
+        record["status"] = "written_resume_ready"
+        record["output_execution_path"] = str(checkpoint_dir / "execution.json")
+        record["resume_execution_path"] = str(checkpoint_dir / "execution.json")
+        record["resume_job_dir"] = str(run_dir)
 
     if resume_job_dir is not None:
         ensure_resume_job_config(resume_job_dir, execution_path)
@@ -357,6 +560,8 @@ def write_truncated_record(
             suffix=suffix,
         )
         truncated_execution["run_id"] = run_dir.name
+        if run_dir.exists():
+            raise FileExistsError(f"Refusing to overwrite existing checkpoint: {run_dir}")
         dump_json(run_dir / "execution.json", truncated_execution)
         record["status"] = "written_resume_ready"
         record["resume_job_dir"] = str(resume_job_dir)
@@ -378,14 +583,34 @@ def truncate_one(
     output_dir: Path | None,
     resume_job_dir: Path | None,
     root: Path,
+    thought_codes: list[str] | None = None,
+    action_codes: list[str] | None = None,
+    code_label_source: str = "auto",
 ) -> list[dict[str, Any]]:
     execution = load_json(execution_path)
     metadata = load_metadata_for_execution(execution_path)
     result = load_result_for_execution(execution_path)
+    code_records = []
+    if thought_codes or action_codes:
+        code_records = truncate_by_codes(
+            execution_path,
+            execution=execution,
+            result=result,
+            thought_codes=thought_codes or [],
+            action_codes=action_codes or [],
+            source=code_label_source,
+            occurrence=occurrence,
+            include_trigger=include_trigger,
+            output_dir=output_dir,
+            resume_job_dir=resume_job_dir,
+            root=root,
+        )
+        if not levels and not keep_message_counts and not payload_offsets:
+            return code_records
     labels = ensure_trajectory_labels(execution, metadata)
     attacks = execution_attacks(execution, metadata)
     messages = execution.get("messages", [])
-    records = []
+    records = code_records
 
     for level in levels:
         index = target_index(labels, level, cut_source, occurrence)
@@ -647,7 +872,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--levels",
         nargs="+",
         type=parse_level,
-        default=["L2", "L3", "L4", "L5"],
+        default=None,
         help="Target levels to truncate at. Defaults to L2 L3 L4 L5.",
     )
     parser.add_argument(
@@ -662,11 +887,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Drop the trigger message instead of truncating immediately after it.",
     )
     parser.add_argument(
+        "--thought-code",
+        action="append",
+        default=[],
+        help="Cut at this Thought Code, retaining the entire matching message. Repeatable.",
+    )
+    parser.add_argument(
+        "--action-code",
+        action="append",
+        default=[],
+        help="Cut at this Action Code, retaining the entire matching message. Repeatable.",
+    )
+    parser.add_argument(
+        "--code-label-source",
+        default="auto",
+        choices=(
+            "auto",
+            "attack_chain_labeled.json",
+            "attack_chain_judge.json",
+            "attack_chain_labeled.md",
+            "attack_chain_judge.md",
+        ),
+        help="Adjacent code annotation file. Auto prefers labeled JSON, judge JSON, then Markdown.",
+    )
+    parser.add_argument(
         "--occurrence",
         type=parse_occurrence,
         default=1,
         help=(
-            "Which exact level occurrence to truncate at when --cut-source is "
+            "Which exact code or level occurrence to truncate at when --cut-source is "
             "first_occurrence. Defaults to 1."
         ),
     )
@@ -707,7 +956,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory where truncated execution/result files are written. If omitted, only JSONL plans are printed.",
+        help="Write each cut as a resumable job (config.yaml and nested execution.json, no result.json). Without output options, print plans only.",
     )
     parser.add_argument(
         "--resume-job-dir",
@@ -726,8 +975,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.occurrence != 1 and args.cut_source != "first_occurrence":
         raise SystemExit("--occurrence can only be used with --cut-source first_occurrence")
     execution_paths = find_execution_paths(args.paths)
+    if not execution_paths:
+        raise SystemExit("No execution.json files found")
     root = common_root(execution_paths)
-    levels = [] if args.skip_labels else args.levels
+    levels = (
+        []
+        if args.skip_labels
+        else (
+            args.levels
+            if args.levels is not None
+            else ([] if args.thought_code or args.action_code else ["L2", "L3", "L4", "L5"])
+        )
+    )
     records: list[dict[str, Any]] = []
     for execution_path in execution_paths:
         records.extend(
@@ -743,6 +1002,9 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 resume_job_dir=args.resume_job_dir,
                 root=root,
+                thought_codes=args.thought_code,
+                action_codes=args.action_code,
+                code_label_source=args.code_label_source,
             )
         )
 

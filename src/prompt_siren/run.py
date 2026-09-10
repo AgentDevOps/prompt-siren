@@ -396,7 +396,7 @@ async def _judge_attack_chain_for_result(
         }
         if judge_model is None:
             raise ValueError("No compatible judge model could be inferred from the agent.")
-        return await judge_attack_chain(
+        analysis = await judge_attack_chain(
             messages,
             attacks=generated_attacks,
             model=judge_model,
@@ -408,6 +408,21 @@ async def _judge_attack_chain_for_result(
             recall_priority=config.attack_chain_judge_recall_priority,
             semantic_precision=config.attack_chain_judge_semantic_precision,
         )
+        if config.attack_chain_codebook_path:
+            from pathlib import Path
+
+            from .attack_chain_codebook_labeling import label_attack_chain_safely
+
+            analysis.codebook_labeling = await label_attack_chain_safely(
+                analysis.to_json(),
+                messages,
+                codebook_path=Path(config.attack_chain_codebook_path),
+                model=judge_model,
+                model_settings=judge_model_settings,
+                batch_size=config.attack_chain_codebook_batch_size,
+                max_attempts=config.attack_chain_judge_max_attempts,
+            )
+        return analysis
     except Exception as exc:
         # Trajectory labeling is auxiliary analysis. A provider/configuration
         # failure must never prevent task evaluation and result persistence.

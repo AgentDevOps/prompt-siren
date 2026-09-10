@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from prompt_siren.attack_chain_codebook_labeling import label_attack_chain_safely
 from prompt_siren.attack_chain_judge import judge_attack_chain, render_attack_chain_markdown
 from prompt_siren.attack_chain_topic_retrieval import retrieve_attack_chain_candidates
 from prompt_siren.job.models import (
@@ -81,6 +82,8 @@ async def extract_execution(
     max_output_tokens: int = 4096,
     recall_priority: bool = False,
     semantic_precision: bool = False,
+    codebook_path: Path | None = None,
+    codebook_batch_size: int = 8,
 ) -> tuple[ExtractionStatus, str]:
     json_path = execution_path.with_name(TASK_ATTACK_CHAIN_JUDGE_FILENAME)
     markdown_path = execution_path.with_name(TASK_ATTACK_CHAIN_JUDGE_MARKDOWN_FILENAME)
@@ -142,11 +145,26 @@ async def extract_execution(
             )
         }
         payload.update(analysis.to_json())
+        if codebook_path is not None:
+            payload["codebook_labeling"] = await label_attack_chain_safely(
+                payload,
+                messages,
+                codebook_path=codebook_path,
+                model=infer_model(model_name),
+                model_settings=model_settings,
+                batch_size=codebook_batch_size,
+                max_attempts=max_attempts,
+            )
         dump_text_atomic(
             json_path,
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         )
         dump_text_atomic(markdown_path, render_attack_chain_markdown(payload, messages))
+        if codebook_path is not None and payload["codebook_labeling"]["status"] == "failed":
+            return "failed", (
+                "attack chain saved, but codebook labeling failed: "
+                + payload["codebook_labeling"]["error"]
+            )
     except Exception as exc:
         return "failed", str(exc)
     return (
@@ -172,6 +190,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-topic-size", type=int, default=3)
     parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
     parser.add_argument("--max-output-tokens", type=int, default=4096)
+    parser.add_argument(
+        "--codebook", type=Path, help="Label the extracted chain using this Markdown codebook."
+    )
+    parser.add_argument("--codebook-batch-size", type=int, default=8)
     judge_mode = parser.add_mutually_exclusive_group()
     judge_mode.add_argument(
         "--recall-priority",
@@ -217,6 +239,8 @@ async def async_main() -> None:
             max_output_tokens=max(1, args.max_output_tokens),
             recall_priority=args.recall_priority,
             semantic_precision=args.semantic_precision,
+            codebook_path=args.codebook,
+            codebook_batch_size=max(1, args.codebook_batch_size),
         )
         counts[status] += 1
         print(f"{status}: {execution_path} ({detail})")
