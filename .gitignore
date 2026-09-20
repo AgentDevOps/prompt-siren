@@ -1,48 +1,82 @@
-# Python-generated files
+# Python bytecode and tool caches
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging output
 build/
 dist/
 wheels/
-*.egg-info
-.pytest_cache
+*.egg-info/
 
 # Virtual environments
-.venv
-.venv-container
+.venv/
+.venv-*/
+venv/
 
-*.env
-pydantic_ai_docs.md
-pydantic_docs.md
+# Secrets and local environment overrides
+.env
+.env.*
+!.env.example
+*.pem
 
-scratchpad.py
-NOTES.md
+# Editor and OS files
+/.claude/
+.vscode/
+.idea/
+.DS_Store
+*~
+*.swp
 
-traces
-*_PLAN.md
-
-
-*.env
-
-.vscode/*
+# Exported/local configuration (defaults live under src/prompt_siren/config)
 /config/
 
-.swebench_cache
-.siren-docker-cache
-.claude/*
-multirun/*
-jobs
-prompt_siren_experiment_design.md
-resume_jobs/*
-papers/
-past_jobs/
-runs/
-open_coding/
+# Prompt Siren caches and generated experiment output
+/.swebench_cache/
+/.siren-docker-cache/
+/jobs/
+/multirun/
+/resume_jobs/
+/runs/
+/traces/
+/images/
+
+# Generated image/container archives and scheduler output
 *.tar
+*.tar.gz
+*.tgz
+*.sif
 *.slurm
 *.log
 *.out
-*.sh
-docs/labeling
-tests/
-truncated/
+/*.sh
+/scripts/*.sh
+
+# Local analysis data and working directories
+/open_coding/
+/open_coding_arian/
+/papers/
+/past_jobs/
+/truncated/
+/useless_data/
+
+# Personal notes and locally downloaded references
+/scratchpad.py
+/NOTES.md
+/*_PLAN.md
+/prompt_siren_experiment_design.md
+/pydantic_ai_docs.md
+/pydantic_docs.md
+
+# This checkout intentionally keeps only already-tracked docs and tests.
+# New local files in these paths should not be uploaded by default.
+/docs/
+/tests/
+/hpc.md

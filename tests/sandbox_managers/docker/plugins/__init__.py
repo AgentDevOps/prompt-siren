@@ -1,1 +1,0 @@
-"""Docker client plugin tests."""
