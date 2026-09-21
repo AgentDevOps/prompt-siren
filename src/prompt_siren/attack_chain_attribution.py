@@ -190,6 +190,28 @@ def _record_text(record: Mapping[str, Any]) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
 
 
+# Typographic lookalikes a model commonly re-types when "copying" a quote, even when asked
+# for a verbatim substring. Normalizing these (and only these) keeps the exact-evidence
+# requirement meaningful without failing evidence over cosmetic punctuation drift.
+_QUOTE_NORMALIZATION_TABLE = str.maketrans(
+    {
+        "\N{LEFT SINGLE QUOTATION MARK}": "'",
+        "\N{RIGHT SINGLE QUOTATION MARK}": "'",
+        "\N{MODIFIER LETTER APOSTROPHE}": "'",
+        "\N{PRIME}": "'",
+        "\N{LEFT DOUBLE QUOTATION MARK}": '"',
+        "\N{RIGHT DOUBLE QUOTATION MARK}": '"',
+        "\N{EN DASH}": "-",
+        "\N{EM DASH}": "-",
+        "\N{NO-BREAK SPACE}": " ",
+    }
+)
+
+
+def _normalize_quote_text(text: str) -> str:
+    return text.translate(_QUOTE_NORMALIZATION_TABLE)
+
+
 def _validate_attribution_output(
     output: AttributionJudgeOutput,
     *,
@@ -208,7 +230,8 @@ def _validate_attribution_output(
         key = (span.message_index, span.part_index)
         if key not in record_by_key:
             raise ValueError(f"dangerous_spans references a message/part outside the chain: {key}")
-        if span.quote not in _record_text(record_by_key[key]):
+        record_text = _normalize_quote_text(_record_text(record_by_key[key]))
+        if _normalize_quote_text(span.quote) not in record_text:
             raise ValueError(f"dangerous_spans quote is not verbatim in message/part {key}")
 
     ranks = [candidate.rank for candidate in output.ranked_candidates]
@@ -226,9 +249,11 @@ def _validate_attribution_output(
                 f"candidate message_index {candidate.message_index} is not an eligible "
                 "original assistant message in the supplied chain"
             )
-        message_text = joined_text_by_message.get(candidate.message_index, "")
+        message_text = _normalize_quote_text(
+            joined_text_by_message.get(candidate.message_index, "")
+        )
         for evidence in candidate.evidence:
-            if evidence not in message_text:
+            if _normalize_quote_text(evidence) not in message_text:
                 raise ValueError(
                     f"candidate evidence is not verbatim in message {candidate.message_index}: "
                     f"{evidence!r}"

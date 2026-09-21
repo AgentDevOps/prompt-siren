@@ -39,9 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /root/.cache \
-    && find / -type d -name __pycache__ -exec rm -rf {{}} + 2>/dev/null || true \
-    && find / -type f -name "*.pyc" -delete 2>/dev/null || true \
-    && find / -type f -name "*.pyo" -delete 2>/dev/null || true \
+    && (find / -type d -name __pycache__ -exec rm -rf {{}} + 2>/dev/null || true) \
+    && (find / -type f -name "*.pyc" -delete 2>/dev/null || true) \
+    && (find / -type f -name "*.pyo" -delete 2>/dev/null || true) \
     && uv cache clean
 
 WORKDIR /testbed/
@@ -62,6 +62,7 @@ RUN sed -i -e 's/\r$//' /root/setup_repo.sh \
         locales-all \
         tzdata \
     && /bin/bash /root/setup_repo.sh \
+    && test -d /testbed/.git \
     && apt-get purge -y build-essential libffi-dev libtiff-dev locales locales-all tzdata \
     && apt-get autoremove -y \
     && apt-get clean \
@@ -74,11 +75,11 @@ RUN sed -i -e 's/\r$//' /root/setup_repo.sh \
     && rm -rf /usr/share/locale/* \
     && rm -rf /var/cache/apt/* \
     && rm -rf /var/log/* \
-    && find / -type d -name __pycache__ -exec rm -rf {{}} + 2>/dev/null || true \
-    && find / -type f -name "*.pyc" -delete 2>/dev/null || true \
-    && find / -type f -name "*.pyo" -delete 2>/dev/null || true \
-    && find / -type f -name "*.a" -delete 2>/dev/null || true \
-    && find /usr -type f -name "*.so.*" -exec strip --strip-unneeded {{}} \; 2>/dev/null || true \
+    && (find / -type d -name __pycache__ -exec rm -rf {{}} + 2>/dev/null || true) \
+    && (find / -type f -name "*.pyc" -delete 2>/dev/null || true) \
+    && (find / -type f -name "*.pyo" -delete 2>/dev/null || true) \
+    && (find / -type f -name "*.a" -delete 2>/dev/null || true) \
+    && (find /usr -type f -name "*.so.*" -exec strip --strip-unneeded {{}} \; 2>/dev/null || true) \
     && uv cache clean
 
 WORKDIR /testbed/
