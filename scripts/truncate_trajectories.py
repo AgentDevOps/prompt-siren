@@ -102,6 +102,134 @@ def load_code_labels(
     raise FileNotFoundError(f"No code labels found next to {execution_path}")
 
 
+def load_attribution(
+    execution_path: Path,
+    messages: list[dict[str, Any]],
+    source: str,
+) -> tuple[dict[str, Any], Path]:
+    path = execution_path.with_name(source)
+    if not path.is_file():
+        raise FileNotFoundError(f"No attribution output found at {path}")
+    payload = load_json(path)
+    if payload.get("status") != "ok":
+        raise ValueError(f"Attribution status is not 'ok' in {path}: {payload.get('status')!r}")
+    candidates = payload.get("ranked_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError(f"No ranked_candidates in {path}")
+    seen_ranks: set[int] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError(f"Invalid ranked candidate in {path}")
+        rank = candidate.get("rank")
+        index = candidate.get("message_index")
+        if type(rank) is not int or rank in seen_ranks:
+            raise ValueError(f"Invalid or duplicate rank in {path}: {rank}")
+        if type(index) is not int or not 0 <= index < len(messages):
+            raise ValueError(f"Invalid message_index in {path}: {index}")
+        if messages[index].get("kind") != "response":
+            raise ValueError(f"Attribution candidate does not refer to an agent response: {index}")
+        seen_ranks.add(rank)
+    return payload, path
+
+
+def truncate_by_attribution(
+    execution_path: Path,
+    *,
+    execution: dict[str, Any],
+    result: dict[str, Any] | None,
+    ranks: list[int],
+    include_trigger: bool,
+    allow_already_succeeded: bool,
+    attribution_source: str,
+    output_dir: Path | None,
+    resume_job_dir: Path | None,
+    root: Path,
+) -> list[dict[str, Any]]:
+    messages = execution.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError(f"Expected messages list in {execution_path}")
+
+    try:
+        payload, attribution_path = load_attribution(execution_path, messages, attribution_source)
+    except (FileNotFoundError, ValueError) as exc:
+        return [
+            {
+                "source_execution_path": str(execution_path),
+                "method": "attribution",
+                "rank": rank,
+                "status": "missing_attribution",
+                "error": str(exc),
+            }
+            for rank in ranks
+        ]
+
+    candidates_by_rank = {
+        candidate["rank"]: candidate for candidate in payload["ranked_candidates"]
+    }
+    records = []
+    for rank in ranks:
+        record: dict[str, Any] = {
+            "source_execution_path": str(execution_path),
+            "method": "attribution",
+            "attribution_source": str(attribution_path),
+            "trajectory_id": payload.get("trajectory_id"),
+            "rank": rank,
+            "include_trigger_message": include_trigger,
+        }
+        candidate = candidates_by_rank.get(rank)
+        if candidate is None:
+            records.append(record | {"status": "missing_attribution_rank"})
+            continue
+        if not candidate.get("replay_eligible", True) and not allow_already_succeeded:
+            records.append(
+                record
+                | {
+                    "trigger_message_index": candidate["message_index"],
+                    "action_execution_status": candidate.get("action_execution_status"),
+                    "attack_already_succeeded": candidate.get("attack_already_succeeded"),
+                    "status": "unsuitable_attack_already_succeeded",
+                }
+            )
+            continue
+
+        index = candidate["message_index"]
+        keep_count = kept_message_count(index, include_trigger)
+        truncated = truncate_execution(execution, keep_count=keep_count)
+        record.update(
+            {
+                "trigger_message_index": index,
+                "action_execution_status": candidate.get("action_execution_status"),
+                "attack_already_succeeded": candidate.get("attack_already_succeeded"),
+                "kept_message_count": keep_count,
+                "original_message_count": len(messages),
+                "status": "planned",
+            }
+        )
+        truncated_result = truncate_result(
+            result,
+            execution=truncated,
+            trajectory_level=None,
+            keep_count=keep_count,
+            source_execution_path=execution_path,
+            truncation=record,
+        )
+        boundary = "after" if include_trigger else "before"
+        suffix = f"attribution_rank_{rank}_{boundary}"
+        records.append(
+            write_truncated_record(
+                record=record,
+                truncated_execution=truncated,
+                truncated_result=truncated_result,
+                output_dir=output_dir,
+                resume_job_dir=resume_job_dir,
+                root=root,
+                execution_path=execution_path,
+                suffix=suffix,
+            )
+        )
+    return records
+
+
 def truncate_by_codes(
     execution_path: Path,
     *,
@@ -586,6 +714,9 @@ def truncate_one(
     thought_codes: list[str] | None = None,
     action_codes: list[str] | None = None,
     code_label_source: str = "auto",
+    attribution_ranks: list[int] | None = None,
+    allow_already_succeeded: bool = False,
+    attribution_source: str = "attack_chain_attribution.json",
 ) -> list[dict[str, Any]]:
     execution = load_json(execution_path)
     metadata = load_metadata_for_execution(execution_path)
@@ -605,12 +736,28 @@ def truncate_one(
             resume_job_dir=resume_job_dir,
             root=root,
         )
-        if not levels and not keep_message_counts and not payload_offsets:
-            return code_records
+    attribution_records = []
+    if attribution_ranks:
+        attribution_records = truncate_by_attribution(
+            execution_path,
+            execution=execution,
+            result=result,
+            ranks=attribution_ranks,
+            include_trigger=include_trigger,
+            allow_already_succeeded=allow_already_succeeded,
+            attribution_source=attribution_source,
+            output_dir=output_dir,
+            resume_job_dir=resume_job_dir,
+            root=root,
+        )
+    if (thought_codes or action_codes or attribution_ranks) and not (
+        levels or keep_message_counts or payload_offsets
+    ):
+        return code_records + attribution_records
     labels = ensure_trajectory_labels(execution, metadata)
     attacks = execution_attacks(execution, metadata)
     messages = execution.get("messages", [])
-    records = code_records
+    records = code_records + attribution_records
 
     for level in levels:
         index = target_index(labels, level, cut_source, occurrence)
@@ -848,6 +995,16 @@ def parse_payload_offset(value: str) -> int:
     return offset
 
 
+def parse_rank(value: str) -> int:
+    try:
+        rank = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError("rank must be an integer") from e
+    if rank < 1:
+        raise argparse.ArgumentTypeError("rank must be at least 1")
+    return rank
+
+
 def parse_keep_message_count(value: str) -> int:
     try:
         count = int(value)
@@ -920,6 +1077,31 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--attribution-rank",
+        nargs="+",
+        type=parse_rank,
+        default=[],
+        help=(
+            "Cut at the attack-chain-attribution candidate with this rank (1 is the primary "
+            "replay candidate), reading an adjacent attack_chain_attribution.json. Repeatable, "
+            "for example: --attribution-rank 1 2."
+        ),
+    )
+    parser.add_argument(
+        "--attribution-source",
+        default="attack_chain_attribution.json",
+        help="Adjacent attribution JSON file produced by scripts/attribute_attack_chains.py.",
+    )
+    parser.add_argument(
+        "--allow-already-succeeded",
+        action="store_true",
+        help=(
+            "Also cut at an attribution candidate flagged attack_already_succeeded "
+            "(replay_eligible=false). By default such candidates are refused because the "
+            "outcome at that point is already decided, not a future first success to study."
+        ),
+    )
+    parser.add_argument(
         "--skip-labels",
         action="store_true",
         help="Do not create the default label-based truncations.",
@@ -984,7 +1166,11 @@ def main(argv: list[str] | None = None) -> int:
         else (
             args.levels
             if args.levels is not None
-            else ([] if args.thought_code or args.action_code else ["L2", "L3", "L4", "L5"])
+            else (
+                []
+                if args.thought_code or args.action_code or args.attribution_rank
+                else ["L2", "L3", "L4", "L5"]
+            )
         )
     )
     records: list[dict[str, Any]] = []
@@ -1005,6 +1191,9 @@ def main(argv: list[str] | None = None) -> int:
                 thought_codes=args.thought_code,
                 action_codes=args.action_code,
                 code_label_source=args.code_label_source,
+                attribution_ranks=args.attribution_rank,
+                allow_already_succeeded=args.allow_already_succeeded,
+                attribution_source=args.attribution_source,
             )
         )
 

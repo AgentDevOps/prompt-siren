@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Attribute an already extracted attack chain to a primary replay candidate.
 
+Every run (including a single trajectory) also writes a short Markdown summary
+listing which trajectories have ranked replay candidates and which don't.
+
 Example:
     uv run python scripts/attribute_attack_chains.py jobs/my_job \\
         --model MODEL_NAME --top-k 3 --failed-only
@@ -12,6 +15,7 @@ import argparse
 import asyncio
 import json
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
@@ -164,6 +168,72 @@ async def attribute_file(
     )
 
 
+def attribution_summary_row(chain_path: Path) -> dict[str, Any]:
+    """Read one trajectory's current on-disk attribution output, if any."""
+    attribution_path = chain_path.with_name("attack_chain_attribution.json")
+    row: dict[str, Any] = {"run_dir": str(chain_path.parent)}
+    if not attribution_path.is_file():
+        return row | {"status": "not_attributed", "candidates": 0, "selected_message_id": None}
+    try:
+        data = _load_json(attribution_path)
+    except (OSError, ValueError):
+        return row | {"status": "unreadable", "candidates": 0, "selected_message_id": None}
+    return row | {
+        "trajectory_id": data.get("trajectory_id"),
+        "status": data.get("status"),
+        "candidates": len(data.get("ranked_candidates") or []),
+        "selected_message_id": data.get("selected_message_id"),
+    }
+
+
+def render_attribution_summary_markdown(rows: list[dict[str, Any]]) -> str:
+    """Render a short index of which trajectories have ranked replay candidates."""
+    counts = Counter(str(row["status"]) for row in rows)
+    lines = ["# Attack-chain attribution summary", "", f"- Trajectories scanned: {len(rows)}"]
+    lines.extend(f"  - {status}: {count}" for status, count in sorted(counts.items()))
+
+    with_candidates = [row for row in rows if row["candidates"] > 0]
+    lines.extend(["", f"## Trajectories with ranked candidates ({len(with_candidates)})", ""])
+    if with_candidates:
+        lines.extend(
+            ["| Run | Status | Candidates | Selected message |", "| --- | --- | --- | --- |"]
+        )
+        lines.extend(
+            f"| {row['run_dir']} | {row['status']} | {row['candidates']} | "
+            f"{row['selected_message_id']} |"
+            for row in with_candidates
+        )
+    else:
+        lines.append("_None._")
+
+    without_candidates = [row for row in rows if row["candidates"] == 0]
+    lines.extend(["", f"## Trajectories without ranked candidates ({len(without_candidates)})", ""])
+    if without_candidates:
+        lines.extend(["| Run | Status |", "| --- | --- |"])
+        lines.extend(f"| {row['run_dir']} | {row['status']} |" for row in without_candidates)
+    else:
+        lines.append("_None._")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def default_summary_path(inputs: list[Path]) -> Path:
+    """Place the summary at the common root of all scanned inputs."""
+    resolved_roots = [(path if path.is_dir() else path.parent).resolve() for path in inputs]
+    common = (
+        resolved_roots[0]
+        if len(resolved_roots) == 1
+        else Path(os.path.commonpath([str(root) for root in resolved_roots]))
+    )
+    return common / "attack_chain_attribution_summary.md"
+
+
+def write_attribution_summary(chain_paths: list[Path], summary_path: Path) -> None:
+    rows = [attribution_summary_row(chain_path) for chain_path in chain_paths]
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(render_attribution_summary_markdown(rows), encoding="utf-8")
+
+
 async def async_main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", type=Path, nargs="+")
@@ -186,6 +256,15 @@ async def async_main() -> None:
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--summary-path",
+        type=Path,
+        default=None,
+        help=(
+            "Where to write the attribution summary Markdown. Defaults to "
+            "attack_chain_attribution_summary.md at the common root of the inputs."
+        ),
+    )
     args = parser.parse_args()
     sources = find_chain_sources(args.inputs)
     if not sources:
@@ -216,6 +295,10 @@ async def async_main() -> None:
             status, detail = "failed", f"{type(exc).__name__}: {exc}"
         failed += status == "failed"
         print(f"{status}: {source.chain_path} ({detail})")
+
+    summary_path = args.summary_path or default_summary_path(args.inputs)
+    write_attribution_summary([source.chain_path for source in sources], summary_path)
+    print(f"summary: {summary_path}")
     if failed:
         raise SystemExit(1)
 
