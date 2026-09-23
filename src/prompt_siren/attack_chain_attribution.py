@@ -212,6 +212,42 @@ def _normalize_quote_text(text: str) -> str:
     return text.translate(_QUOTE_NORMALIZATION_TABLE)
 
 
+# A model asked for a "verbatim" quote sometimes truncates mid-sentence and appends a
+# fabricated closing period/ellipsis instead of copying to a real boundary. Accepting that
+# is safe only when the untouched remainder is still a long, genuine substring; it never lets
+# a shortened *or* reworded quote pass, since the remainder must match exactly on its own.
+_MIN_TRIMMED_QUOTE_LENGTH = 20
+
+
+def _matches_verbatim(quote: str, source_text: str) -> bool:
+    normalized_quote = _normalize_quote_text(quote)
+    normalized_source = _normalize_quote_text(source_text)
+    if normalized_quote in normalized_source:
+        return True
+    trimmed = re.sub(r"[.\s]+$", "", normalized_quote)
+    return (
+        len(trimmed) >= _MIN_TRIMMED_QUOTE_LENGTH
+        and trimmed != normalized_quote
+        and trimmed in normalized_source
+    )
+
+
+def _find_verbatim_part(quote: str, records: list[dict[str, Any]]) -> tuple[int, int] | None:
+    """Locate a quote the judge cited at the wrong (message_index, part_index)."""
+    for record in records:
+        if _matches_verbatim(quote, _record_text(record)):
+            return record["message_index"], record["part_index"]
+    return None
+
+
+def _find_verbatim_message(evidence: str, joined_text_by_message: Mapping[int, str]) -> int | None:
+    """Locate evidence the judge attributed to the wrong message."""
+    for message_index, text in joined_text_by_message.items():
+        if _matches_verbatim(evidence, text):
+            return message_index
+    return None
+
+
 def _validate_attribution_output(
     output: AttributionJudgeOutput,
     *,
@@ -230,8 +266,13 @@ def _validate_attribution_output(
         key = (span.message_index, span.part_index)
         if key not in record_by_key:
             raise ValueError(f"dangerous_spans references a message/part outside the chain: {key}")
-        record_text = _normalize_quote_text(_record_text(record_by_key[key]))
-        if _normalize_quote_text(span.quote) not in record_text:
+        if not _matches_verbatim(span.quote, _record_text(record_by_key[key])):
+            actual_key = _find_verbatim_part(span.quote, records)
+            if actual_key is not None and actual_key != key:
+                raise ValueError(
+                    f"dangerous_spans quote is not verbatim in message/part {key}; it matches "
+                    f"message/part {actual_key} instead, cite that location"
+                )
             raise ValueError(f"dangerous_spans quote is not verbatim in message/part {key}")
 
     ranks = [candidate.rank for candidate in output.ranked_candidates]
@@ -249,11 +290,16 @@ def _validate_attribution_output(
                 f"candidate message_index {candidate.message_index} is not an eligible "
                 "original assistant message in the supplied chain"
             )
-        message_text = _normalize_quote_text(
-            joined_text_by_message.get(candidate.message_index, "")
-        )
+        message_text = joined_text_by_message.get(candidate.message_index, "")
         for evidence in candidate.evidence:
-            if _normalize_quote_text(evidence) not in message_text:
+            if not _matches_verbatim(evidence, message_text):
+                actual_index = _find_verbatim_message(evidence, joined_text_by_message)
+                if actual_index is not None and actual_index != candidate.message_index:
+                    raise ValueError(
+                        f"candidate evidence is not verbatim in message {candidate.message_index}; "
+                        f"it matches message {actual_index} instead, cite that location: "
+                        f"{evidence!r}"
+                    )
                 raise ValueError(
                     f"candidate evidence is not verbatim in message {candidate.message_index}: "
                     f"{evidence!r}"
