@@ -671,7 +671,9 @@ async def judge_attack_chain(
     topic_retrieval: dict[str, Any] | None = None,
     recall_priority: bool = False,
     semantic_precision: bool = False,
+    context_note: str | None = None,
 ) -> AttackChainJudgeAnalysis:
+    """``context_note``, when given, is appended to the prompt (e.g. a truncated-trajectory notice)."""
     if recall_priority and semantic_precision:
         raise ValueError("recall_priority and semantic_precision are mutually exclusive")
     contexts = attack_context_items(attacks)
@@ -701,6 +703,7 @@ async def judge_attack_chain(
         + json.dumps([item.model_dump() for item in contexts], ensure_ascii=False, indent=2)
         + "\n\nRole-eligible message indices:\n"
         + json.dumps(_role_candidate_indices(records), ensure_ascii=False, indent=2)
+        + (f"\n\n{context_note}" if context_note else "")
         + "\n\nRequired JSON schema:\n"
         + json.dumps(output_schema, ensure_ascii=False)
     )

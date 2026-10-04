@@ -325,8 +325,12 @@ async def attribute_attack_chain(
     model_settings: ModelSettings | None = None,
     top_k: int | None = None,
     max_attempts: int = 3,
+    context_note: str | None = None,
 ) -> dict[str, Any]:
-    """Return one validated attribution result; never modify the chain or its labels."""
+    """Return one validated attribution result; never modify the chain or its labels.
+
+    ``context_note``, when given, is appended to the prompt (e.g. a truncated-trajectory notice).
+    """
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
     if top_k is not None and top_k < 1:
@@ -382,6 +386,7 @@ async def attribute_attack_chain(
         + json.dumps(sanitized_input, ensure_ascii=False, indent=2, default=str)
         + "\n\nEligible assistant message indices (only these are selectable candidates):\n"
         + json.dumps(eligible)
+        + (f"\n\n{context_note}" if context_note else "")
         + "\n\nRequired JSON schema:\n"
         + json.dumps(AttributionJudgeOutput.model_json_schema())
     )
