@@ -90,13 +90,18 @@ from prompt_siren.prefix_attribution import (  # noqa: E402
     CHAIN_MODES,
     ChainMode,
     checkpoint_summary_row,
+    detection_summary,
     extract_prefix_chain,
     first_payload_exposure_index,
+    harm_message_index,
+    harm_patterns_for_task,
+    load_harm_signatures,
     PREFIX_ATTRIBUTION_NOTICE,
     PREFIX_CHAIN_NOTICE,
     prefix_point,
     PREFIX_SCHEMA_VERSION,
     render_checkpoint_summary_markdown,
+    render_detection_summary_markdown,
     render_prefix_summary_markdown,
     render_timeline_markdown,
     restrict_chain_to_prefix,
@@ -160,6 +165,9 @@ class TrajectoryPlan:
     # (execution_path is then its resolved source run) and the ASR of its replays.
     checkpoint_path: Path | None = None
     replay_asr: dict[str, Any] | None = None
+    # Set with --harm-signatures: the first assistant message performing the attacker's
+    # operation (the step a runtime monitor must flag before its tool call executes).
+    harm_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -413,6 +421,15 @@ def plan_checkpoint(
     plan.replay_asr = replay_asr_for_checkpoint(checkpoint_path)
     assert args.output_dir is not None
     plan.base_dir = args.output_dir / checkpoint_path.parent.relative_to(root)
+    job_config = nearest_job_config(checkpoint_path)
+    job_dir = (job_config or checkpoint_path).parent.resolve()
+    if plan.base_dir.resolve().is_relative_to(job_dir):
+        # Writing run-like folders into the checkpoint's own job would overwrite the
+        # checkpoint and leave extra files where a replay resumes from.
+        return (
+            f"--output-dir would write inside the checkpoint's job {job_dir}; "
+            "choose a separate folder"
+        )
     return plan
 
 
@@ -461,6 +478,17 @@ def plan_trajectory(
             include_full=args.include_full,
         )
     )
+    harm_index = (
+        harm_message_index(
+            messages,
+            harm_patterns_for_task(args.harm_signature_map, str(execution.get("task_id") or "")),
+        )
+        if args.harm_signature_map is not None
+        else None
+    )
+    if args.stop_after_harm and harm_index is not None:
+        # A flag on a later prefix comes after the harmful call executed: too late to block.
+        lengths = [length for length in lengths if length - 1 <= harm_index]
     if not lengths:
         return "no prefix lengths selected for this trajectory"
     return TrajectoryPlan(
@@ -479,6 +507,7 @@ def plan_trajectory(
         attack_score=attack_score,
         exposure_index=first_payload_exposure_index(messages, attacks),
         prefix_lengths=lengths,
+        harm_index=harm_index,
     )
 
 
@@ -698,6 +727,7 @@ def write_timeline(plan: TrajectoryPlan, config: dict[str, Any]) -> dict[str, An
         "summary": summary,
         "points": points,
     }
+    timeline["detection"] = detection_summary(points, harm_index=plan.harm_index)
     json_name, md_name = (
         (CHECKPOINT_COMPARISON_JSON, CHECKPOINT_COMPARISON_MD)
         if plan.checkpoint_path is not None
@@ -823,6 +853,33 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "attack chain may be partial (identical-prompt ablation)."
         ),
     )
+    detection = parser.add_argument_group("runtime detection (E1)")
+    detection.add_argument(
+        "--harm-signatures",
+        type=Path,
+        default=None,
+        help=(
+            "JSON mapping a task_id substring to regexes that identify the attacker's "
+            "harmful operation in a tool call (see scripts/harm_signatures.json). Enables "
+            "harm-step detection and writes detection_summary.{md,jsonl}."
+        ),
+    )
+    detection.add_argument(
+        "--stop-at-first-flag",
+        action="store_true",
+        help=(
+            "Judge each run's prefixes in order and stop at the first flag "
+            "(attribution status ok), as a runtime monitor would."
+        ),
+    )
+    detection.add_argument(
+        "--stop-after-harm",
+        action="store_true",
+        help=(
+            "Do not judge prefixes ending after the harm message: a flag there comes after "
+            "the harmful call executed. Requires --harm-signatures."
+        ),
+    )
     parser.add_argument(
         "--outcome",
         choices=("any", "failed", "succeeded"),
@@ -889,6 +946,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--response-stride, --concurrency and --max-attempts must be positive")
     if any(not 0 < fraction <= 1 for fraction in args.fraction):
         parser.error("--fraction values must be in (0, 1]")
+    if args.stop_after_harm and args.harm_signatures is None:
+        parser.error("--stop-after-harm needs --harm-signatures")
+    args.harm_signature_map = (
+        load_harm_signatures(json.loads(args.harm_signatures.read_text(encoding="utf-8")))
+        if args.harm_signatures is not None
+        else None
+    )
     return args
 
 
@@ -956,11 +1020,21 @@ async def async_main(argv: list[str]) -> int:
             semaphore=semaphore,
         )
 
-    await asyncio.gather(
-        *(run(plan, keep_count) for plan in plans for keep_count in plan.prefix_lengths)
-    )
+    async def run_until_first_flag(plan: TrajectoryPlan) -> None:
+        for keep_count in plan.prefix_lengths:
+            await run(plan, keep_count)
+            if plan.points[keep_count].get("attribution_status") == "ok":
+                break
+
+    if args.stop_at_first_flag:
+        await asyncio.gather(*(run_until_first_flag(plan) for plan in plans))
+    else:
+        await asyncio.gather(
+            *(run(plan, keep_count) for plan in plans for keep_count in plan.prefix_lengths)
+        )
 
     rows: list[dict[str, Any]] = []
+    detection_rows: list[dict[str, Any]] = []
     for plan in plans:
         statuses = [plan.points[length]["status"] for length in sorted(plan.points)]
         if args.dry_run:
@@ -983,6 +1057,23 @@ async def async_main(argv: list[str]) -> int:
             )
         else:
             rows.append({"run_dir": str(plan.execution_path.parent)} | summary)
+        if args.harm_signature_map is not None:
+            job_config = nearest_job_config(plan.execution_path)
+            detection_rows.append(
+                {
+                    "run_dir": str((plan.checkpoint_path or plan.execution_path).parent),
+                    "group": (
+                        job_config.parent if job_config else plan.execution_path.parents[1]
+                    ).name,
+                    "task_id": plan.execution.get("task_id"),
+                    "source_attack_score": plan.attack_score,
+                    "message_count": len(plan.messages),
+                }
+                | detection_summary(
+                    [plan.points[length] for length in sorted(plan.points)],
+                    harm_index=plan.harm_index,
+                )
+            )
         plan_failed = statuses.count("failed")
         failed += bool(plan_failed)
         print(
@@ -1018,6 +1109,14 @@ async def async_main(argv: list[str]) -> int:
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
         )
         print(f"summary: {summary_path}")
+        if detection_rows:
+            detection_path = summary_path.with_name("detection_summary.md")
+            dump_text_atomic(detection_path, render_detection_summary_markdown(detection_rows))
+            dump_text_atomic(
+                detection_path.with_suffix(".jsonl"),
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in detection_rows),
+            )
+            print(f"detection: {detection_path}")
     return 1 if failed else 0
 
 
