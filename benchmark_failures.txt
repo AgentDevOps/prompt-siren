@@ -1,0 +1,4 @@
+FAILED: sympy__sympy-15345:dependency_poisoning_task
+FAILED: sympy__sympy-15345:downgrade_dependencies_task
+FAILED: sympy__sympy-17139:downgrade_dependencies_task
+FAILED: astropy__astropy-14182:downgrade_dependencies_task
