@@ -69,7 +69,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from prompt_siren.attack_chain_attribution import (  # noqa: E402
     attribute_attack_chain_safely,
+    build_attribution_system_prompt,
     render_attribution_markdown,
+    with_preceding_context,
 )
 from prompt_siren.attack_chain_codebook_labeling import (  # noqa: E402
     label_attack_chain_safely,
@@ -95,6 +97,7 @@ from prompt_siren.prefix_attribution import (  # noqa: E402
     first_payload_exposure_index,
     harm_message_index,
     harm_patterns_for_task,
+    is_flagged,
     load_harm_signatures,
     PREFIX_ATTRIBUTION_NOTICE,
     PREFIX_CHAIN_NOTICE,
@@ -109,6 +112,7 @@ from prompt_siren.prefix_attribution import (  # noqa: E402
     summarize_timeline,
 )
 from prompt_siren.providers import infer_model  # noqa: E402
+from prompt_siren.trajectory_labeling import messages_to_dicts  # noqa: E402
 from pydantic_ai.models import Model  # noqa: E402
 from pydantic_ai.settings import ModelSettings  # noqa: E402
 
@@ -253,7 +257,7 @@ def inputs_root(inputs: list[Path]) -> Path:
 
 def run_config(args: argparse.Namespace) -> dict[str, Any]:
     """Settings that change prefix outputs; mixing them in one directory is refused."""
-    return {
+    config: dict[str, Any] = {
         "prefix_schema_version": PREFIX_SCHEMA_VERSION,
         "chain_mode": args.chain_mode,
         "prefix_notice": not args.no_prefix_notice,
@@ -271,6 +275,16 @@ def run_config(args: argparse.Namespace) -> dict[str, Any]:
         "codebook": str(args.codebook) if args.codebook else None,
         "codebook_model": (args.codebook_model or args.model) if args.codebook else None,
     }
+    # Only recorded when used, so directories written before these options still resume.
+    if args.attribution_skill is not None:
+        config["attribution_skill"] = str(args.attribution_skill)
+    if args.context_before:
+        config["context_before"] = args.context_before
+    if args.scores:
+        config["scores"] = True
+    if args.flag_threshold is not None:
+        config["flag_threshold"] = args.flag_threshold
+    return config
 
 
 def model_settings_for(model: str, max_output_tokens: int) -> ModelSettings:
@@ -543,6 +557,37 @@ def write_checkpoint_execution(
     )
 
 
+def agent_messages_before_harm(plan: TrajectoryPlan) -> list[int] | None:
+    """Agent messages after the payload exposure and before the harm step: the early-warning
+    opportunities (None when the run has no harm step)."""
+    if plan.harm_index is None:
+        return None
+    start = -1 if plan.exposure_index is None else plan.exposure_index
+    return [
+        index
+        for index, message in enumerate(messages_to_dicts(plan.messages))
+        if start < index < plan.harm_index and message.get("kind") == "response"
+    ]
+
+
+def reused_chain(
+    plan: TrajectoryPlan, keep_count: int, args: argparse.Namespace
+) -> dict[str, Any] | None:
+    """--reuse-chains-from: the chain an earlier run (same inputs, other output dir) extracted
+    for this exact prefix, so two attribution skills are compared on identical chains."""
+    if args.reuse_chains_from is None or args.output_dir is None:
+        return None
+    relative = plan.base_dir.relative_to(args.output_dir)
+    other = output_files(
+        TrajectoryPlan(**{**plan.__dict__, "base_dir": args.reuse_chains_from / relative}),
+        keep_count,
+    )
+    chain = _load_optional(other.chain_json)
+    if chain is None or (chain.get("prefix") or {}).get("keep_message_count") != keep_count:
+        return None
+    return {key: value for key, value in chain.items() if key != "prefix"}
+
+
 async def evaluate_prefix(
     plan: TrajectoryPlan,
     keep_count: int,
@@ -560,6 +605,7 @@ async def evaluate_prefix(
             status=status,
             full_chain=plan.full_chain,
             full_attribution=plan.full_attribution,
+            flag_threshold=args.flag_threshold,
             **kwargs,
         )
 
@@ -631,7 +677,10 @@ async def evaluate_prefix(
     }
     async with semaphore:
         try:
-            if args.chain_mode == "extract":
+            reused = reused_chain(plan, keep_count, args)
+            if reused is not None:
+                chain = reused
+            elif args.chain_mode == "extract":
                 assert chain_model is not None
                 chain = await extract_prefix_chain(
                     prefix_messages,
@@ -669,7 +718,7 @@ async def evaluate_prefix(
             assert attribution_model is not None
             attribution_model_name = args.attribution_model or args.model
             attribution = await attribute_attack_chain_safely(
-                chain,
+                with_preceding_context(chain, prefix_messages, args.context_before),
                 prefix_messages,
                 trajectory_id=str(
                     chain.get("run_id")
@@ -685,6 +734,9 @@ async def evaluate_prefix(
                 top_k=args.top_k,
                 max_attempts=args.max_attempts,
                 context_note=None if args.no_prefix_notice else PREFIX_ATTRIBUTION_NOTICE,
+                system_prompt=args.attribution_system_prompt,
+                prompt_version=args.attribution_prompt_version,
+                require_scores=args.scores,
             )
             attribution["prefix"] = prefix_meta
             dump_text_atomic(
@@ -886,6 +938,45 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="any",
         help="Filter source trajectories by result.json attack_score (outcome metadata).",
     )
+    skill = parser.add_argument_group("attribution skill (defaults: the built-in prompt)")
+    skill.add_argument(
+        "--attribution-skill",
+        type=Path,
+        default=None,
+        help=(
+            "Criteria file (e.g. truncated/self_evolve/skills/v10a.md) placed between the fixed "
+            "attribution preamble and output contract."
+        ),
+    )
+    skill.add_argument(
+        "--context-before",
+        type=int,
+        default=0,
+        help="Show the attribution judge up to N preceding tool/user messages per candidate.",
+    )
+    skill.add_argument(
+        "--scores",
+        action="store_true",
+        help="Ask the attribution judge for a 0-100 risk_score per candidate.",
+    )
+    skill.add_argument(
+        "--flag-threshold",
+        type=int,
+        default=None,
+        help=(
+            "With --scores: a prefix is flagged only when a candidate's risk_score is at least "
+            "this (also the stop condition of --stop-at-first-flag)."
+        ),
+    )
+    skill.add_argument(
+        "--reuse-chains-from",
+        type=Path,
+        default=None,
+        help=(
+            "Another --output-dir written from the same inputs: reuse its per-prefix chains "
+            "instead of extracting them again (prefixes it lacks are extracted)."
+        ),
+    )
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
@@ -948,6 +1039,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--fraction values must be in (0, 1]")
     if args.stop_after_harm and args.harm_signatures is None:
         parser.error("--stop-after-harm needs --harm-signatures")
+    if args.flag_threshold is not None and not args.scores:
+        parser.error("--flag-threshold needs --scores")
+    if args.context_before < 0:
+        parser.error("--context-before must be non-negative")
+    if args.reuse_chains_from is not None and (args.output_dir is None or args.checkpoints):
+        parser.error("--reuse-chains-from needs --output-dir and works on prefix sweeps only")
+    args.attribution_system_prompt = (
+        build_attribution_system_prompt(args.attribution_skill.read_text(encoding="utf-8"))
+        if args.attribution_skill is not None
+        else None
+    )
+    args.attribution_prompt_version = (
+        f"skill-{args.attribution_skill.stem}" if args.attribution_skill is not None else None
+    )
     args.harm_signature_map = (
         load_harm_signatures(json.loads(args.harm_signatures.read_text(encoding="utf-8")))
         if args.harm_signatures is not None
@@ -1023,7 +1128,7 @@ async def async_main(argv: list[str]) -> int:
     async def run_until_first_flag(plan: TrajectoryPlan) -> None:
         for keep_count in plan.prefix_lengths:
             await run(plan, keep_count)
-            if plan.points[keep_count].get("attribution_status") == "ok":
+            if is_flagged(plan.points[keep_count]):
                 break
 
     if args.stop_at_first_flag:
@@ -1068,6 +1173,8 @@ async def async_main(argv: list[str]) -> int:
                     "task_id": plan.execution.get("task_id"),
                     "source_attack_score": plan.attack_score,
                     "message_count": len(plan.messages),
+                    "payload_exposure_index": plan.exposure_index,
+                    "agent_messages_before_harm": agent_messages_before_harm(plan),
                 }
                 | detection_summary(
                     [plan.points[length] for length in sorted(plan.points)],

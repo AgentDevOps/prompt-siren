@@ -275,8 +275,12 @@ def prefix_point(
     full_chain: Mapping[str, Any] | None = None,
     full_attribution: Mapping[str, Any] | None = None,
     error: str | None = None,
+    flag_threshold: int | None = None,
 ) -> dict[str, Any]:
-    """One row of a trajectory's prefix timeline."""
+    """One row of a trajectory's prefix timeline.
+
+    With ``flag_threshold`` (scored attribution), the prefix is flagged only when a candidate's
+    ``risk_score`` reaches the threshold; without it, any candidate (status ok) is a flag."""
     serialized = messages_to_dicts(messages[:keep_count])
     point: dict[str, Any] = {
         "keep_message_count": keep_count,
@@ -310,6 +314,24 @@ def prefix_point(
                 "confidence": prefix_attribution.get("confidence"),
             }
         )
+        scores = [
+            candidate.get("risk_score")
+            for candidate in candidates
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("risk_score"), int)
+        ]
+        if scores:
+            point["max_risk_score"] = max(scores)
+        if flag_threshold is not None:
+            flagged_indices = [
+                candidate.get("message_index")
+                for candidate in candidates
+                if isinstance(candidate, Mapping)
+                and isinstance(candidate.get("risk_score"), int)
+                and candidate["risk_score"] >= flag_threshold
+            ]
+            point["flag_threshold"] = flag_threshold
+            point["flagged"] = prefix_attribution.get("status") == "ok" and bool(flagged_indices)
+            point["flagged_message_indices"] = flagged_indices
     if status == "evaluated":
         point.update(
             compare_prefix_to_full(
@@ -321,6 +343,13 @@ def prefix_point(
             )
         )
     return point
+
+
+def is_flagged(point: Mapping[str, Any]) -> bool:
+    """A runtime alarm: the scored threshold decision when one was applied, else status ok."""
+    if "flagged" in point:
+        return bool(point["flagged"])
+    return point.get("attribution_status") == "ok"
 
 
 def summarize_timeline(
@@ -343,7 +372,7 @@ def summarize_timeline(
     """
     ordered = sorted(points, key=lambda point: point["keep_message_count"])
     evaluated = [point for point in ordered if point["status"] == "evaluated"]
-    flagged = [point for point in evaluated if point.get("attribution_status") == "ok"]
+    flagged = [point for point in evaluated if is_flagged(point)]
     first_flag = flagged[0] if flagged else None
     selections = [point.get("selected_message_id") for point in flagged]
     full_selected = (full_attribution or {}).get("selected_message_id")
@@ -678,9 +707,7 @@ def detection_summary(
     """
     ordered = sorted(points, key=lambda point: point["keep_message_count"])
     evaluated = [point for point in ordered if point["status"] == "evaluated"]
-    first_flag = next(
-        (point for point in evaluated if point.get("attribution_status") == "ok"), None
-    )
+    first_flag = next((point for point in evaluated if is_flagged(point)), None)
     flag_index = first_flag["last_message_index"] if first_flag else None
     before_harm = (
         None
@@ -710,6 +737,10 @@ def detection_summary(
             if first_flag and harm_index is not None
             else None
         ),
+        "first_flag_flagged_message_indices": (
+            first_flag.get("flagged_message_indices") if first_flag else None
+        ),
+        "first_flag_max_risk_score": first_flag.get("max_risk_score") if first_flag else None,
     }
 
 
