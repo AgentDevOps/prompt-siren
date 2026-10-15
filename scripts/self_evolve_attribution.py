@@ -43,10 +43,12 @@ import argparse
 import asyncio
 import difflib
 import json
+import random
 import re
 import string
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,10 @@ from scripts.attribute_attack_chains import (  # noqa: E402
 INJECTED_BLOCK = re.compile(r"<INFORMATION>[\s\S]*?</INFORMATION>")
 INJECTION_MARKER = re.compile(r"</?\s*INFORMATION\s*>", re.IGNORECASE)
 EXCLUDED_DIRS = ("excluded_attack_succeeded_sources",)
+# Held-out evaluation (``holdout``): its replays never feed the loop's training labels.
+HOLDOUT_DIRNAME = "self_evolve_holdout"
+TRAINING_EXCLUDED_DIRS = (*EXCLUDED_DIRS, HOLDOUT_DIRNAME)
+REPLAY_TOP_UP_ATTEMPTS = 3
 # The judge setup the replay study's attributions were produced with. Under any other setup the
 # loop re-attributes v1 itself, so the baseline and the candidates use the same judge.
 STUDY_JUDGE_SETTINGS = {"judge_model": "gpt-5.6-luna", "context_before": 0, "scores": False}
@@ -310,12 +316,16 @@ class Sources:
 
 
 def collect_labels(
-    sources: Sources, truncated: Path, rule: LabelRule
+    sources: Sources,
+    truncated: Path,
+    rule: LabelRule,
+    exclude: tuple[str, ...] = TRAINING_EXCLUDED_DIRS,
 ) -> dict[tuple[str, int], Label]:
-    """Every replayed cut in truncated/ that qualifies, merged per (run, message)."""
+    """Every replayed cut in truncated/ that qualifies, merged per (run, message). By default the
+    held-out replays are left out, so they never become training labels of the loop."""
     labels: dict[tuple[str, int], Label] = {}
     for checkpoint in sorted(truncated.glob("**/*__truncated_*/execution.json")):
-        if any(part in EXCLUDED_DIRS for part in checkpoint.parts):
+        if any(part in exclude for part in checkpoint.parts):
             continue
         key = sources.resolve(checkpoint)
         if key is None:
@@ -711,13 +721,25 @@ def label_message(sources: Sources, key: str, message_index: int, args: argparse
     single_rule = LabelRule(rule.min_replays, rule.max_replays, rule.zero_safe_at, fdr=False)
     for target in rule.steps():
         completed, successes, _ = study.replay_state(cut_dir)
-        if completed < target:
+        # A replay batch can return fewer runs than requested; top up instead of stopping
+        # with an uncertain verdict, and give up only when a batch adds nothing.
+        for _ in range(REPLAY_TOP_UP_ATTEMPTS):
+            if completed >= target or args.dry_run:
+                break
             cut = study.Cut(job, run_dir, message_index, "failed", cut_dir)
             replay_args = argparse.Namespace(
                 replays=target, replay_concurrency=args.replay_concurrency, dry_run=args.dry_run
             )
             study.stage_replay(cut, replay_args)
+            before = completed
             completed, successes, _ = study.replay_state(cut_dir)
+            if completed < target:
+                print(
+                    f"warning: {cut_dir} has {completed}/{target} replays after a batch",
+                    flush=True,
+                )
+            if completed == before:
+                break
         probe = {
             (key, message_index): Label(
                 key, message_index, successes, completed, (job.base_k, job.base_n), []
@@ -1339,7 +1361,8 @@ def export_labels(args: argparse.Namespace) -> None:
     """
     jobs_root = args.jobs_root.resolve()
     sources = Sources(args)
-    labels = collect_labels(sources, args.truncated, args.label_rule)
+    # Held-out labels are ground truth too: the dataset gets every label.
+    labels = collect_labels(sources, args.truncated, args.label_rule, exclude=EXCLUDED_DIRS)
     per_run: dict[str, list[Label]] = defaultdict(list)
     for label in labels.values():
         per_run[label.run_key].append(label)
@@ -1397,6 +1420,221 @@ def export_labels(args: argparse.Namespace) -> None:
     )
 
 
+# ---------------------------------------------------------------- held-out evaluation
+
+
+def frozen_threshold(state: Path, version: str) -> int:
+    """The score threshold the loop chose for ``version`` on the training runs."""
+    for entry in history(state):
+        if entry["version"] == version and entry.get("metrics", {}).get("threshold") is not None:
+            return int(entry["metrics"]["threshold"])
+    raise SystemExit(f"no threshold recorded for {version} in {state / 'iterations.jsonl'}")
+
+
+def training_metrics(state: Path, version: str) -> dict[str, Any]:
+    for entry in history(state):
+        if entry["version"] == version:
+            return entry.get("metrics", {})
+    return {}
+
+
+def holdout_runs(
+    sources: Sources, training: set[str], out: Path, sample: int | None, seed: int
+) -> list[str]:
+    """Failed runs the loop never trained on, frozen in runs.json at the first call."""
+    frozen = out / "runs.json"
+    if frozen.exists():
+        return load_json(frozen)["runs"]
+    runs = sorted(key for key in sources.runs if key not in training and sources.chain(key))
+    if sample is not None and sample < len(runs):
+        runs = sorted(random.Random(seed).sample(runs, sample))
+    out.mkdir(parents=True, exist_ok=True)
+    frozen.write_text(
+        json.dumps({"seed": seed, "sample": sample, "runs": runs}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return runs
+
+
+def fixed_flags(
+    evaluation: Evaluation, sources: Sources, runs: list[str], threshold: int
+) -> list[tuple[str, int]]:
+    run_set = set(runs)
+    return sorted(
+        (key, index)
+        for (key, index), score in evaluation.scores.items()
+        if key in run_set and score >= threshold and sources.before_attack(key, index)
+    )
+
+
+def render_holdout(
+    state: Path,
+    versions: list[str],
+    thresholds: dict[str, int],
+    flags: dict[str, list[tuple[str, int]]],
+    labels: dict[tuple[str, int], Label],
+    runs: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    for version in versions:
+        verdicts = [
+            labels[item].verdict if item in labels else "unlabeled" for item in flags[version]
+        ]
+        tp, fp = verdicts.count("dangerous"), verdicts.count("safe")
+        rows.append(
+            {
+                "version": version,
+                "threshold": thresholds[version],
+                "flagged": len(flags[version]),
+                "flagged_runs": len({key for key, _ in flags[version]}),
+                "tp": tp,
+                "fp": fp,
+                "uncertain": verdicts.count("uncertain"),
+                "unlabeled": verdicts.count("unlabeled"),
+                "precision": tp / (tp + fp) if tp + fp else None,
+                "pessimistic_precision": tp / len(verdicts) if verdicts else None,
+                "training": training_metrics(state, version),
+            }
+        )
+    found = sorted(
+        item
+        for item in set().union(*(set(items) for items in flags.values()))
+        if item in labels and labels[item].verdict == "dangerous"
+    )
+
+    def fmt(value: float | None) -> str:
+        return "-" if value is None else f"{value:.2f}"
+
+    lines = [
+        "# Held-out evaluation of evolved attribution skills",
+        "",
+        f"Held-out runs: {len(runs)} attack-failed runs the loop never trained on. Each version "
+        "is applied with its threshold frozen from training; every flagged message (before any "
+        "attack action) is replay-labelled with the same rule as in training.",
+        "",
+        "| Version | Threshold | Training precision | Training flagged (TP / FP) | Held-out flagged "
+        "messages / runs | TP | FP | Uncertain | Unlabeled | Held-out precision | Held-out "
+        "pessimistic precision | Held-out dangerous flagged |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        train = row["training"]
+        lines.append(
+            f"| {row['version']} | {row['threshold']} | {fmt(train.get('pessimistic_precision'))} | "
+            f"{train.get('flagged', '-')} ({train.get('tp', '-')} / {train.get('fp', '-')}) | "
+            f"{row['flagged']} / {row['flagged_runs']} | {row['tp']} | {row['fp']} | "
+            f"{row['uncertain']} | {row['unlabeled']} | {fmt(row['precision'])} | "
+            f"{fmt(row['pessimistic_precision'])} | {row['tp']}/{len(found)} |"
+        )
+    lines += [
+        "",
+        "Held-out dangerous messages are those found by any version, so recall here is relative "
+        "to the union of the versions' flags.",
+        "",
+        "## Dangerous messages found on held-out runs",
+        "",
+        "| Run | Message | Replays | Baseline | p | Flagged by |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for key, index in found:
+        label = labels[(key, index)]
+        by = ", ".join(version for version in versions if (key, index) in set(flags[version]))
+        lines.append(
+            f"| {key.split('/')[0]} {key.split('/')[-1]} | {index} | "
+            f"{label.successes}/{label.replays} | {label.baseline[0]}/{label.baseline[1]} | "
+            f"{label.p_value:.3g} | {by} |"
+        )
+    if not found:
+        lines.append("| - | - | - | - | - | - |")
+    return "\n".join(lines) + "\n", rows
+
+
+async def holdout(args: argparse.Namespace) -> None:
+    """Apply frozen versions to unseen failed runs, replay-label their flags, compare."""
+    if not args.scores:
+        raise SystemExit(
+            "holdout compares versions at their frozen score thresholds; drop --no-scores"
+        )
+    state = args.state
+    settings = {
+        "judge_model": args.judge_model,
+        "context_before": args.context_before,
+        "scores": args.scores,
+    }
+    if load_json(state / "settings.json") != settings:
+        raise SystemExit(
+            f"{state} was run with other judge settings: {load_json(state / 'settings.json')}"
+        )
+    out = args.truncated / HOLDOUT_DIRNAME
+    sources = Sources(args)
+    training = {
+        label.run_key for label in collect_labels(sources, args.truncated, args.label_rule).values()
+    }
+    runs = holdout_runs(sources, training, out, args.holdout_sample, args.seed)
+    if training & set(runs):
+        raise SystemExit("held-out runs overlap the training runs; remove runs.json to rebuild")
+    versions = args.versions or ["v1", current_incumbent(state)]
+    thresholds = {version: frozen_threshold(state, version) for version in versions}
+    print(f"held-out runs: {len(runs)}; versions: {thresholds}", flush=True)
+
+    judge = create_attribution_model(args.judge_model)
+    flags: dict[str, list[tuple[str, int]]] = {}
+    for version in versions:
+        directory = out / "attributions" / version
+        criteria = skill_path(state, version).read_text(encoding="utf-8")
+        await attribute_runs(sources, runs, criteria, version, directory, judge, args)
+        evaluation = load_evaluation(sources, runs, version, directory)
+        flags[version] = fixed_flags(evaluation, sources, runs, thresholds[version])
+        print(
+            f"{version}: {len(flags[version])} flagged message(s) in "
+            f"{len({key for key, _ in flags[version]})} run(s); "
+            f"{len(evaluation.failed)} attribution(s) failed",
+            flush=True,
+        )
+
+    labels = collect_labels(sources, args.truncated, args.label_rule, exclude=EXCLUDED_DIRS)
+    union = sorted(set().union(*(set(items) for items in flags.values())))
+    if args.part is not None:
+        # Split by position in the (cached, stable) flag list, so a part keeps its messages
+        # when it is restarted after others finished.
+        part, parts = args.part
+        union = union[part - 1 :: parts]
+    todo = [item for item in union if item not in labels or labels[item].verdict == "uncertain"]
+    rule: LabelRule = args.label_rule
+    print(
+        f"to label: {len(todo)} of {len(union)} flagged message(s); "
+        f"{len(todo) * rule.min_replays}-{len(todo) * rule.max_replays} replays",
+        flush=True,
+    )
+    if args.label and todo:
+        label_args = argparse.Namespace(**{**vars(args), "state": out})
+        with ThreadPoolExecutor(max_workers=args.label_concurrency) as pool:
+            list(pool.map(lambda item: label_message(sources, item[0], item[1], label_args), todo))
+        labels = collect_labels(sources, args.truncated, args.label_rule, exclude=EXCLUDED_DIRS)
+
+    report, rows = render_holdout(state, versions, thresholds, flags, labels, runs)
+    (out / "report.md").write_text(report, encoding="utf-8")
+    (out / "summary.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    (out / "flags.jsonl").write_text(
+        "".join(
+            json.dumps(
+                {
+                    "version": version,
+                    "run": key,
+                    "message_index": index,
+                    "verdict": labels[(key, index)].verdict if (key, index) in labels else None,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for version in versions
+            for key, index in flags[version]
+        ),
+        encoding="utf-8",
+    )
+    print(report)
+
+
 def status(args: argparse.Namespace) -> None:
     sources = Sources(args)
     labels = collect_labels(sources, args.truncated, args.label_rule)
@@ -1427,7 +1665,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("command", choices=("status", "run", "export-labels"))
+    parser.add_argument("command", choices=("status", "run", "export-labels", "holdout"))
     parser.add_argument("--state", type=Path, default=Path("truncated/self_evolve"))
     parser.add_argument("--jobs-root", type=Path, default=Path("jobs/groups"))
     parser.add_argument("--truncated", type=Path, default=Path("truncated"))
@@ -1504,6 +1742,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--fdr", action="store_true", help="Benjamini-Hochberg-corrected 'dangerous' threshold"
     )
     labelling.add_argument("--replay-concurrency", type=int, default=3)
+    held = parser.add_argument_group("holdout")
+    held.add_argument(
+        "--versions",
+        nargs="+",
+        default=None,
+        help="versions to compare on held-out runs (default: v1 and the incumbent)",
+    )
+    held.add_argument(
+        "--holdout-sample",
+        type=int,
+        default=None,
+        help="use a random sample of this many held-out runs (frozen at the first call)",
+    )
+    held.add_argument("--seed", type=int, default=0)
+    held.add_argument(
+        "--label",
+        action="store_true",
+        help="replay-label the flagged messages (without it: attribute and report the cost)",
+    )
+    held.add_argument(
+        "--label-concurrency", type=int, default=2, help="messages replay-labelled in parallel"
+    )
+    held.add_argument(
+        "--part",
+        default=None,
+        help="K/N: label only the K-th of N shares of the flagged messages (e.g. 1/3), so the "
+        "replays can run as separate jobs; the report always covers all labels found so far",
+    )
     parser.add_argument("--attribution-attempts", type=int, default=5)
     parser.add_argument(
         "--crash-retries",
@@ -1519,6 +1785,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if not 1 <= args.min_replays <= args.max_replays:
         parser.error("--min-replays must be between 1 and --max-replays")
     args.label_rule = LabelRule(args.min_replays, args.max_replays, args.zero_safe_at, args.fdr)
+    if args.part is not None:
+        try:
+            part, parts = (int(value) for value in args.part.split("/"))
+        except ValueError:
+            parser.error("--part must look like K/N, e.g. 1/3")
+        if not 1 <= part <= parts:
+            parser.error("--part K/N needs 1 <= K <= N")
+        args.part = (part, parts)
     args.harm_signature_map = load_harm_signatures(
         json.loads(args.harm_signatures.read_text(encoding="utf-8"))
     )
@@ -1531,6 +1805,8 @@ def main(argv: list[str] | None = None) -> int:
         status(args)
     elif args.command == "export-labels":
         export_labels(args)
+    elif args.command == "holdout":
+        asyncio.run(holdout(args))
     else:
         asyncio.run(run_loop(args))
     return 0

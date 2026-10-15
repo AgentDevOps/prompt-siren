@@ -60,10 +60,9 @@ def write_inputs(args: argparse.Namespace) -> None:
     }
     for name, paths in lists.items():
         missing = [path for path in paths if not (Path(path) / "execution.json").is_file()]
-        if missing:
-            raise SystemExit(
-                f"{name}: {len(missing)} runs without execution.json, e.g. {missing[0]}"
-            )
+        if missing:  # e.g. the high-ASR jobs, moved to jobs/groups_excluded
+            print(f"{name}: skipping {len(missing)} runs without execution.json")
+            paths = [path for path in paths if path not in set(missing)]
         target = args.root / f"inputs_{name}.txt"
         target.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
         print(f"{target}: {len(paths)} runs")
