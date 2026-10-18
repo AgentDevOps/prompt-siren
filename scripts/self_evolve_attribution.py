@@ -513,7 +513,11 @@ def known_dangerous(labels: dict[tuple[str, int], Label], eval_runs: list[str]) 
 
 
 def accept(
-    candidate: dict[str, Any], incumbent: dict[str, Any], max_lost: int, min_gain: float
+    candidate: dict[str, Any],
+    incumbent: dict[str, Any],
+    max_lost: int,
+    min_gain: float,
+    precision_tolerance: float = 0.0,
 ) -> tuple[bool, str]:
     """Keep a candidate only if it loses at most ``max_lost`` of the verified dangerous messages
     v1 ranks (a floor against the original, so losses cannot accumulate over iterations) and its
@@ -529,10 +533,14 @@ def accept(
     )
     if gain >= min_gain - 1e-9:  # tolerate floating-point error (0.12 - 0.10 < 0.02)
         return True, change
-    if candidate["known_dangerous_ranked"] > incumbent["known_dangerous_ranked"] and gain >= -1e-9:
+    if (
+        candidate["known_dangerous_ranked"] > incumbent["known_dangerous_ranked"]
+        and gain >= -precision_tolerance - 1e-9
+    ):
+        cost = "no precision cost" if gain >= -1e-9 else f"precision cost {-gain:.3f}"
         return True, (
             f"ranks more verified dangerous messages ({incumbent['known_dangerous_ranked']} -> "
-            f"{candidate['known_dangerous_ranked']}) at no precision cost; {change}"
+            f"{candidate['known_dangerous_ranked']}) at {cost}; {change}"
         )
     return False, f"pessimistic precision gain {gain:+.3f} below the required {min_gain:+.3f}"
 
@@ -1587,9 +1595,25 @@ async def run_loop(args: argparse.Namespace) -> None:
             rejections += 1
             continue
 
-        version, rationale, candidate, _, plan = max(
-            screened, key=lambda item: (item[3]["pessimistic_precision"], -item[3]["unlabeled"])
-        )
+        def preference(
+            item: tuple[Any, ...], incumbent_metrics: dict[str, Any] = incumbent_metrics
+        ) -> tuple[Any, ...]:
+            metrics = item[3]
+            base = (metrics["pessimistic_precision"], -metrics["unlabeled"])
+            if not args.precision_tolerance:
+                return base
+            # Evaluate a candidate the training rule would accept (e.g. a recall gain within the
+            # precision tolerance) before one that only scores higher but would be rejected.
+            would_accept, _ = accept(
+                metrics,
+                incumbent_metrics,
+                args.max_lost,
+                args.min_gain,
+                args.precision_tolerance,
+            )
+            return (would_accept, *base)
+
+        version, rationale, candidate, _, plan = max(screened, key=preference)
         for other_version, other_rationale, _, other_metrics, other_plan in screened:
             if other_version != version:
                 append_history(
@@ -1627,7 +1651,13 @@ async def run_loop(args: argparse.Namespace) -> None:
         candidate_metrics, incumbent_metrics, lost = compare(
             candidate, incumbent, v1, labels, sources, eval_runs, args, protect
         )
-        ok, reason = accept(candidate_metrics, incumbent_metrics, args.max_lost, args.min_gain)
+        ok, reason = accept(
+            candidate_metrics,
+            incumbent_metrics,
+            args.max_lost,
+            args.min_gain,
+            args.precision_tolerance,
+        )
         validation: dict[str, dict[str, Any]] | None = None
         if ok and args.validation_list and args.scores:
             validation = await validation_record(
@@ -1639,7 +1669,9 @@ async def run_loop(args: argparse.Namespace) -> None:
                 judge,
                 args,
             )
-            ok, gate_reason = validation_gate(validation[version], validation[incumbent_version])
+            ok, gate_reason = validation_gate(
+                validation[version], validation[incumbent_version], args.precision_tolerance
+            )
             reason = f"{reason}; {gate_reason}"
         rejections = 0 if ok else rejections + 1
         if ok:
@@ -1716,9 +1748,12 @@ def validation_score(
     }
 
 
-def validation_gate(candidate: dict[str, Any], incumbent: dict[str, Any]) -> tuple[bool, str]:
+def validation_gate(
+    candidate: dict[str, Any], incumbent: dict[str, Any], precision_tolerance: float = 0.0
+) -> tuple[bool, str]:
     """Reject a candidate that catches fewer verified dangerous validation messages than the
-    incumbent, or has a lower validation precision (no flags counts as 0)."""
+    incumbent, or has a lower validation precision (no flags counts as 0). A candidate that catches
+    more may lose up to ``precision_tolerance`` of validation precision."""
     caught, incumbent_caught = len(candidate["caught"]), len(incumbent["caught"])
     precision = candidate["precision"] or 0.0
     incumbent_precision = incumbent["precision"] or 0.0
@@ -1728,7 +1763,8 @@ def validation_gate(candidate: dict[str, Any], incumbent: dict[str, Any]) -> tup
     )
     if caught < incumbent_caught:
         return False, f"rejected by {summary}"
-    if precision < incumbent_precision - 1e-9:
+    allowed = precision_tolerance if caught > incumbent_caught else 0.0
+    if precision < incumbent_precision - allowed - 1e-9:
         return False, f"rejected by {summary}"
     return True, summary
 
@@ -1849,6 +1885,8 @@ def full_settings(args: argparse.Namespace) -> dict[str, Any]:
         settings["validation_seed"] = args.validation_seed
     if args.protect != "verbatim":
         settings["protect"] = args.protect
+    if args.precision_tolerance:
+        settings["precision_tolerance"] = args.precision_tolerance
     return settings
 
 
@@ -2300,6 +2338,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="verified dangerous messages ranked by v1 that a candidate may stop ranking",
     )
     loop.add_argument("--target-precision", type=float, default=None)
+    loop.add_argument(
+        "--precision-tolerance",
+        type=float,
+        default=0.0,
+        help="accept a candidate that ranks more verified dangerous messages if its precision "
+        "drops by at most this much (training rule and validation gate); with a tolerance, the "
+        "candidate the training rule would accept is evaluated first (default 0: no drop allowed)",
+    )
     loop.add_argument(
         "--protect",
         choices=("verbatim", "behaviour"),
