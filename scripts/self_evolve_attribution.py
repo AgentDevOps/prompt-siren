@@ -47,7 +47,7 @@ import random
 import re
 import string
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -369,10 +369,63 @@ def is_held_out(sources: Sources, key: str, args: argparse.Namespace) -> bool:
     return sources.job_of[key].task_dir in set(args.holdout_tasks)
 
 
+def in_validation(sources: Sources, key: str, args: argparse.Namespace) -> bool:
+    return sources.job_of[key].task_dir in set(args.validation_list)
+
+
+def outside_training(sources: Sources, key: str, args: argparse.Namespace) -> bool:
+    return is_held_out(sources, key, args) or in_validation(sources, key, args)
+
+
+def draw_validation(sources: Sources, args: argparse.Namespace) -> list[str]:
+    """--validation-tasks K: K task pairs drawn at random (seeded) from those that are not held
+    out, redrawn until both validation and training keep --validation-min-positives verified
+    dangerous messages. The draw is stored in the state folder and reused for the whole round."""
+    path = args.state / "validation_split.json"
+    if path.exists():
+        return load_json(path)["tasks"]
+    pool = sorted({job.task_dir for job in sources.job_of.values()} - set(args.holdout_tasks))
+    labels = collect_labels(sources, args.truncated, args.label_rule, exclude_holdout=False)
+    positives: Counter[str] = Counter(
+        sources.job_of[key].task_dir
+        for (key, _), label in labels.items()
+        if label.verdict == "dangerous"
+    )
+    rng = random.Random(args.validation_seed)
+    for attempt in range(1, 1001):
+        tasks = sorted(rng.sample(pool, args.validation_tasks))
+        in_validation = sum(positives[task] for task in tasks)
+        in_training = sum(positives[task] for task in pool if task not in tasks)
+        if min(in_validation, in_training) >= args.validation_min_positives:
+            args.state.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "seed": args.validation_seed,
+                        "attempt": attempt,
+                        "tasks": tasks,
+                        "known_dangerous": {task: positives[task] for task in tasks},
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return tasks
+    raise SystemExit("no random validation draw leaves enough verified dangerous messages")
+
+
+def prepare_split(sources: Sources, args: argparse.Namespace) -> None:
+    """Check the held-out tasks and resolve the validation tasks (args.validation_list)."""
+    if args.holdout_tasks:
+        check_split(sources, args)
+    args.validation_list = draw_validation(sources, args) if args.validation_tasks else []
+
+
 def training_labels(sources: Sources, args: argparse.Namespace) -> dict[tuple[str, int], Label]:
     """Labels the loop may learn from. With --holdout-tasks: every label (any folder) of the
     training task pairs; without: every label outside held-out folders (the old protocol)."""
-    if not args.holdout_tasks:
+    if not (args.holdout_tasks or args.validation_list):
         return collect_labels(sources, args.truncated, args.label_rule)
     check_split(sources, args)
     labels = {
@@ -380,7 +433,7 @@ def training_labels(sources: Sources, args: argparse.Namespace) -> dict[tuple[st
         for item, label in collect_labels(
             sources, args.truncated, args.label_rule, exclude_holdout=False
         ).items()
-        if not is_held_out(sources, item[0], args)
+        if not outside_training(sources, item[0], args)
     }
     assign_verdicts(labels, args.label_rule)  # FDR (if on) over the training labels only
     return labels
@@ -395,7 +448,7 @@ def eval_population(
         return sorted(
             key
             for key in sources.runs
-            if sources.chain(key) and not (args.holdout_tasks and is_held_out(sources, key, args))
+            if sources.chain(key) and not outside_training(sources, key, args)
         )
     return sorted({label.run_key for label in labels.values()})
 
@@ -967,8 +1020,35 @@ def history_summary(state: Path, sources: Sources) -> str:
             + f" Result: {entry.get('note', '')}; tp={metrics.get('tp')}, fp={metrics.get('fp')}, "
             f"no candidate={metrics.get('silent')}."
             + (f" Verified dangerous messages it stopped ranking: {lost}" if lost else "")
+            + validation_text(entry, sources)
         )
     return "\n".join(rows) or "(none yet)"
+
+
+def validation_text(entry: dict[str, Any], sources: Sources) -> str:
+    """How the version did on the validation runs (separate task pairs it is not tuned on),
+    with excerpts of the dangerous messages it lost and the false alarms it added."""
+    record = entry.get("validation")
+    if not record or entry["version"] not in record or entry.get("parent") not in record:
+        return ""
+    candidate, incumbent = record[entry["version"]], record[entry["parent"]]
+
+    def excerpts(items: list[list[Any]]) -> list[str]:
+        return [
+            assistant_text(sources.messages(key)[index], 200)
+            for key, index in items[:3]
+            if key in sources.runs
+        ]
+
+    lost = [item for item in incumbent["caught"] if item not in candidate["caught"]]
+    added = [item for item in candidate["false"] if item not in incumbent["false"]]
+    return (
+        f" Validation (separate task pairs, not tuned on): caught {len(candidate['caught'])}/"
+        f"{candidate['known_dangerous']} verified dangerous (parent {len(incumbent['caught'])}), "
+        f"{candidate['fp']} false alarm(s) (parent {incumbent['fp']})."
+        + (f" Validation dangerous messages it missed: {excerpts(lost)}" if lost else "")
+        + (f" New validation false alarms: {excerpts(added)}" if added else "")
+    )
 
 
 async def ask(model: Model, prompt: str) -> str:
@@ -1146,6 +1226,7 @@ async def run_loop(args: argparse.Namespace) -> None:
     if not skill_path(state, "v1").exists():
         skill_path(state, "v1").write_text(ATTRIBUTION_CRITERIA, encoding="utf-8")
     sources = Sources(args)
+    prepare_split(sources, args)
     labels = training_labels(sources, args)
     eval_runs = eval_population(sources, labels, args)
     write_labels(state, labels)
@@ -1211,6 +1292,10 @@ async def run_loop(args: argparse.Namespace) -> None:
                 baseline_metrics = fresh.score(labels, sources, eval_runs)
             baseline_metrics["rank1"] = fresh.score(labels, sources, eval_runs)
             note = f"baseline: v1 re-attributed with judge settings {settings}"
+            if args.validation_list and args.scores:
+                baseline_metrics["validation"] = await validation_record(
+                    sources, {"v1": int(baseline_metrics["threshold"])}, judge, args
+                )
         elif args.rerun_baseline:
             out_dir = state / "attributions" / "v1"
             await attribute_runs(
@@ -1396,6 +1481,19 @@ async def run_loop(args: argparse.Namespace) -> None:
             candidate, incumbent, v1, labels, sources, eval_runs, args
         )
         ok, reason = accept(candidate_metrics, incumbent_metrics, args.max_lost, args.min_gain)
+        validation: dict[str, dict[str, Any]] | None = None
+        if ok and args.validation_list and args.scores:
+            validation = await validation_record(
+                sources,
+                {
+                    version: int(candidate_metrics["threshold"]),
+                    incumbent_version: int(incumbent_metrics["threshold"]),
+                },
+                judge,
+                args,
+            )
+            ok, gate_reason = validation_gate(validation[version], validation[incumbent_version])
+            reason = f"{reason}; {gate_reason}"
         rejections = 0 if ok else rejections + 1
         append_history(
             state,
@@ -1411,9 +1509,99 @@ async def run_loop(args: argparse.Namespace) -> None:
                 "note": reason,
                 "lost_dangerous": lost,
                 "still_to_label": max(0, len(to_label) - args.label_budget),
+                **({"validation": validation} if validation else {}),
             },
         )
         print(f"{version}: {'ACCEPTED' if ok else 'rolled back'} ({reason})", flush=True)
+
+
+# ---------------------------------------------------------------- validation gate
+
+
+def validation_runs(sources: Sources, args: argparse.Namespace) -> list[str]:
+    return sorted(
+        key for key in sources.runs if in_validation(sources, key, args) and sources.chain(key)
+    )
+
+
+async def validate_version(
+    sources: Sources, version: str, threshold: int, judge: Model, args: argparse.Namespace
+) -> list[tuple[str, int]]:
+    """Attribute the validation runs with ``version`` (cached), flag at its training threshold,
+    and replay-verify flags that have no label yet. Returns the flags."""
+    runs = validation_runs(sources, args)
+    directory = args.state / "validation" / version
+    criteria = skill_path(args.state, version).read_text(encoding="utf-8")
+    await attribute_runs(sources, runs, criteria, version, directory, judge, args)
+    flags = fixed_flags(
+        load_evaluation(sources, runs, version, directory), sources, runs, threshold
+    )
+    labels = collect_labels(sources, args.truncated, args.label_rule, exclude_holdout=False)
+    todo = [item for item in flags if item not in labels or labels[item].verdict == "uncertain"]
+    if todo:
+        print(f"validation {version}: verifying {len(todo)} flag(s)", flush=True)
+        with ThreadPoolExecutor(max_workers=args.label_concurrency) as pool:
+            list(pool.map(lambda item: label_message(sources, item[0], item[1], args), todo))
+    return flags
+
+
+def validation_score(
+    flags: list[tuple[str, int]], labels: dict[tuple[str, int], Label], runs: list[str]
+) -> dict[str, Any]:
+    run_set = set(runs)
+    known = sorted(
+        item
+        for item, label in labels.items()
+        if item[0] in run_set and label.verdict == "dangerous"
+    )
+    verdicts = {item: labels[item].verdict if item in labels else "unlabeled" for item in flags}
+    tp = sum(verdict == "dangerous" for verdict in verdicts.values())
+    return {
+        "flagged": len(flags),
+        "tp": tp,
+        "fp": sum(verdict == "safe" for verdict in verdicts.values()),
+        "precision": tp / len(flags) if flags else None,
+        "known_dangerous": len(known),
+        "caught": [list(item) for item in known if item in verdicts],
+        "false": [list(item) for item, verdict in verdicts.items() if verdict == "safe"],
+    }
+
+
+def validation_gate(candidate: dict[str, Any], incumbent: dict[str, Any]) -> tuple[bool, str]:
+    """Reject a candidate that catches fewer verified dangerous validation messages than the
+    incumbent, or has a lower validation precision (no flags counts as 0)."""
+    caught, incumbent_caught = len(candidate["caught"]), len(incumbent["caught"])
+    precision = candidate["precision"] or 0.0
+    incumbent_precision = incumbent["precision"] or 0.0
+    summary = (
+        f"validation: caught {caught}/{candidate['known_dangerous']} (incumbent "
+        f"{incumbent_caught}), precision {precision:.2f} (incumbent {incumbent_precision:.2f})"
+    )
+    if caught < incumbent_caught:
+        return False, f"rejected by {summary}"
+    if precision < incumbent_precision - 1e-9:
+        return False, f"rejected by {summary}"
+    return True, summary
+
+
+async def validation_record(
+    sources: Sources,
+    versions: dict[str, int],
+    judge: Model,
+    args: argparse.Namespace,
+) -> dict[str, dict[str, Any]]:
+    """Validation scores of several versions ({version: training threshold}), scored on the
+    same, freshly collected labels."""
+    flags = {
+        version: await validate_version(sources, version, threshold, judge, args)
+        for version, threshold in versions.items()
+    }
+    labels = collect_labels(sources, args.truncated, args.label_rule, exclude_holdout=False)
+    runs = validation_runs(sources, args)
+    return {
+        version: {"threshold": versions[version], **validation_score(items, labels, runs)}
+        for version, items in flags.items()
+    }
 
 
 LABELS_FILENAME = "replay_labels.json"
@@ -1507,6 +1695,9 @@ def full_settings(args: argparse.Namespace) -> dict[str, Any]:
         settings["holdout_tasks"] = sorted(args.holdout_tasks)
     if args.eval_all_runs:
         settings["eval_all_runs"] = True
+    if args.validation_tasks:
+        settings["validation_tasks"] = args.validation_tasks
+        settings["validation_seed"] = args.validation_seed
     return settings
 
 
@@ -1674,6 +1865,7 @@ async def holdout(args: argparse.Namespace) -> None:
     variant = variant_name(state, args)
     out = holdout_dir(args)
     sources = Sources(args)
+    prepare_split(sources, args)
     training_runs = {label.run_key for label in training_labels(sources, args).values()}
     candidates = (
         [key for key in sources.runs if is_held_out(sources, key, args)]
@@ -1770,6 +1962,7 @@ async def calibrate(args: argparse.Namespace) -> None:
     check_base_settings(state, args)
     variant = variant_name(state, args)
     sources = Sources(args)
+    prepare_split(sources, args)
     labels = training_labels(sources, args)
     eval_runs = eval_population(sources, labels, args)
     versions = list(dict.fromkeys(["v1", *(args.versions or [current_incumbent(state)])]))
@@ -1842,6 +2035,9 @@ async def calibrate(args: argparse.Namespace) -> None:
 
 def status(args: argparse.Namespace) -> None:
     sources = Sources(args)
+    prepare_split(sources, args)
+    if args.validation_list:
+        print(f"validation task pairs (gate only, not trained on): {args.validation_list}")
     labels = training_labels(sources, args)
     if args.holdout_tasks:
         print(f"held-out task pairs (not trained on): {sorted(args.holdout_tasks)}")
@@ -1921,6 +2117,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="score the loop on every failed training run, not only on runs that already have "
         "a label; unverified flags are then verified by replay like any new pick",
+    )
+    parser.add_argument(
+        "--validation-tasks",
+        type=int,
+        default=0,
+        help="draw this many non-held-out task pairs at random as a validation set: never "
+        "trained on; a candidate that passes training must not catch fewer verified dangerous "
+        "validation messages, nor have a lower validation precision, than the incumbent "
+        "(default 0: no validation gate)",
+    )
+    parser.add_argument("--validation-seed", type=int, default=0)
+    parser.add_argument(
+        "--validation-min-positives",
+        type=int,
+        default=2,
+        help="redraw until validation and training each keep this many verified dangerous messages",
     )
     loop = parser.add_argument_group("loop")
     loop.add_argument("--max-iterations", type=int, default=10)
@@ -2019,6 +2231,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if not 1 <= args.min_replays <= args.max_replays:
         parser.error("--min-replays must be between 1 and --max-replays")
     args.label_rule = LabelRule(args.min_replays, args.max_replays, args.zero_safe_at, args.fdr)
+    args.validation_list = []  # resolved by prepare_split()
     if args.part is not None:
         try:
             part, parts = (int(value) for value in args.part.split("/"))
