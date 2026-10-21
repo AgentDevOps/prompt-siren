@@ -58,13 +58,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from prompt_siren.attack_chain_attribution import (  # noqa: E402  # noqa: E402
+from prompt_siren.attack_chain_attribution import (  # noqa: E402
     attribute_attack_chain_safely,
     ATTRIBUTION_CRITERIA,
     ATTRIBUTION_PREAMBLE,
     build_attribution_system_prompt,
     with_preceding_context as with_context,
 )
+from prompt_siren.attack_chain_judge import _referenced_message_indices  # noqa: E402
 from prompt_siren.prefix_attribution import (  # noqa: E402
     harm_message_index,
     harm_patterns_for_task,
@@ -744,7 +745,7 @@ async def attribute_runs(
         if chain is None:
             return
         messages = sources.messages(key)
-        chain = with_context(chain, messages, args.context_before)
+        chain = with_context(chain, messages, args.context_before, args.context_after)
         async with semaphore:
             result = await attribute_attack_chain_safely(
                 chain,
@@ -1390,6 +1391,9 @@ async def run_loop(args: argparse.Namespace) -> None:
                 sources, eval_runs, ATTRIBUTION_CRITERIA, "v1", out_dir, judge, args
             )
             fresh = load_evaluation(sources, eval_runs, "v1", out_dir)
+            if args.explore_initial:
+                labels = explore_messages(sources, eval_runs, labels, args.explore_initial, 0, args)
+                write_labels(state, labels)
             if args.scores and args.verify_baseline:
                 # The workflow verifies its own picks: replay-label v1's flags until its operating
                 # point has no unverified flag left (the threshold can move as labels arrive).
@@ -1463,6 +1467,12 @@ async def run_loop(args: argparse.Namespace) -> None:
         if iteration > args.max_iterations:
             print("stop: iteration limit", flush=True)
             return
+        if rejections >= args.patience:
+            print(f"stop: {rejections} rejections in a row", flush=True)
+            return
+        if args.explore:
+            labels = explore_messages(sources, eval_runs, labels, args.explore, iteration, args)
+            write_labels(state, labels)
         incumbent_version = current_incumbent(state)
         incumbent = load_evaluation(
             sources, eval_runs, incumbent_version, attributions_dir(state, incumbent_version)
@@ -1696,6 +1706,71 @@ async def run_loop(args: argparse.Namespace) -> None:
         print(f"{version}: {'ACCEPTED' if ok else 'rolled back'} ({reason})", flush=True)
 
 
+# ---------------------------------------------------------------- exploration
+
+
+def selectable_messages(sources: Sources, runs: list[str]) -> list[tuple[str, int]]:
+    """Assistant messages of each run's attack chain that come before its attack action: the
+    messages the attribution judge could pick."""
+    items: list[tuple[str, int]] = []
+    for key in runs:
+        messages = sources.messages(key)
+        items += [
+            (key, index)
+            for index in sorted(set(_referenced_message_indices(sources.chain(key) or {})))
+            if 0 <= index < len(messages)
+            and messages[index].get("kind") == "response"
+            and sources.before_attack(key, index)
+        ]
+    return items
+
+
+def explore_messages(
+    sources: Sources,
+    runs: list[str],
+    labels: dict[tuple[str, int], Label],
+    count: int,
+    iteration: int,
+    args: argparse.Namespace,
+) -> dict[tuple[str, int], Label]:
+    """Skill-independent exploration: replay-verify ``count`` messages drawn at random (seeded per
+    iteration) from the unlabelled selectable chain messages of the training runs, so dangerous
+    messages that no skill version ranks can still enter the training labels."""
+    pool = [
+        item
+        for item in selectable_messages(sources, runs)
+        if item not in labels or labels[item].verdict == "uncertain"
+    ]
+    rng = random.Random(f"{args.explore_seed}:{iteration}")
+    picked = sorted(rng.sample(pool, min(count, len(pool))))
+    if picked:
+        print(f"exploring {len(picked)} of {len(pool)} unlabelled chain message(s)", flush=True)
+        with ThreadPoolExecutor(max_workers=args.label_concurrency) as pool_executor:
+            list(
+                pool_executor.map(
+                    lambda item: label_message(sources, item[0], item[1], args), picked
+                )
+            )
+    labels = training_labels(sources, args)
+    rows = [
+        {
+            "iteration": iteration,
+            "run": key,
+            "message_index": index,
+            "verdict": labels[(key, index)].verdict if (key, index) in labels else None,
+            "replays": f"{labels[(key, index)].successes}/{labels[(key, index)].replays}"
+            if (key, index) in labels
+            else None,
+        }
+        for key, index in picked
+    ]
+    with (args.state / "exploration.jsonl").open("a", encoding="utf-8") as handle:
+        handle.writelines(json.dumps(row) + "\n" for row in rows)
+    found = sum(row["verdict"] == "dangerous" for row in rows)
+    print(f"exploration: {found} dangerous of {len(rows)} explored", flush=True)
+    return labels
+
+
 # ---------------------------------------------------------------- validation gate
 
 
@@ -1880,6 +1955,8 @@ def full_settings(args: argparse.Namespace) -> dict[str, Any]:
         settings["holdout_tasks"] = sorted(args.holdout_tasks)
     if args.eval_all_runs:
         settings["eval_all_runs"] = True
+    if args.context_after:
+        settings["context_after"] = args.context_after
     if args.validation_tasks:
         settings["validation_tasks"] = args.validation_tasks
         settings["validation_seed"] = args.validation_seed
@@ -1887,6 +1964,10 @@ def full_settings(args: argparse.Namespace) -> dict[str, Any]:
         settings["protect"] = args.protect
     if args.precision_tolerance:
         settings["precision_tolerance"] = args.precision_tolerance
+    if args.explore or args.explore_initial:
+        settings["explore"] = args.explore
+        settings["explore_initial"] = args.explore_initial
+        settings["explore_seed"] = args.explore_seed
     return settings
 
 
@@ -2235,6 +2316,11 @@ def status(args: argparse.Namespace) -> None:
     for label in labels.values():
         counts[label.verdict] += 1
     print(f"label rule: {args.label_rule}")
+    explored_path = args.state / "exploration.jsonl"
+    if explored_path.exists():
+        explored = [json.loads(line) for line in explored_path.read_text().splitlines() if line]
+        verdicts = Counter(row["verdict"] for row in explored)
+        print(f"exploration: {len(explored)} message(s) verified -> {dict(verdicts)}")
     print(f"evaluation runs (failed{'' if args.eval_all_runs else ', labelled'}): {len(eval_runs)}")
     print(f"labels (before any attack action): {len(labels)} -> {dict(counts)}")
     for label in sorted(labels.values(), key=lambda label: label.p_value):
@@ -2280,6 +2366,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=int,
         default=3,
         help="also show the judge up to N preceding non-assistant messages of each chain message",
+    )
+    parser.add_argument(
+        "--context-after",
+        type=int,
+        default=0,
+        help="also show the judge up to N non-assistant messages right after each chain message "
+        "(its own tool results; never the agent's later messages), default 0",
     )
     parser.add_argument(
         "--scores",
@@ -2338,6 +2431,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="verified dangerous messages ranked by v1 that a candidate may stop ranking",
     )
     loop.add_argument("--target-precision", type=float, default=None)
+    loop.add_argument(
+        "--explore",
+        type=int,
+        default=0,
+        help="per iteration, replay-verify this many randomly drawn unlabelled chain messages "
+        "(before the attack action) of the training runs, independent of the skill (default 0)",
+    )
+    loop.add_argument(
+        "--explore-initial",
+        type=int,
+        default=0,
+        help="the same once at iteration 0, before v1 is scored (new state only; default 0)",
+    )
+    loop.add_argument("--explore-seed", type=int, default=0)
     loop.add_argument(
         "--precision-tolerance",
         type=float,

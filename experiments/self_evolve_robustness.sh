@@ -9,6 +9,7 @@
 #   verbatim   = round 7 (rules supporting a correct pick are frozen)
 #   behaviour  = round 8 (regression set instead of frozen rules)
 #   tolerant   = round 9 (round 8 + recall gains may cost a little precision)
+#   explore    = round 10 (round 9 + skill-independent random exploration)
 #
 # Environment (defaults in brackets):
 #   SEED [1]  validation seed of the repeat     MODES ["verbatim behaviour"]
@@ -29,6 +30,7 @@ script_for() {
     verbatim) echo experiments/self_evolve_round7.sh ;;
     behaviour) echo experiments/self_evolve_round8.sh ;;
     tolerant) echo experiments/self_evolve_round9.sh ;;
+    explore) echo experiments/self_evolve_round10.sh ;;
     *) echo "unknown mode $1" >&2; exit 1 ;;
   esac
 }
@@ -58,7 +60,7 @@ case "${1:-}" in
     done
     ;;
   report)
-    "${UV[@]}" python - truncated/self_evolve_r7 truncated/self_evolve_r8 truncated/self_evolve_r9 \
+    "${UV[@]}" python - truncated/self_evolve_r7 truncated/self_evolve_r8 truncated/self_evolve_r9 truncated/self_evolve_r10 truncated/self_evolve_r11 \
       truncated/self_evolve_robust_s*_* <<'PY'
 import json, sys
 from pathlib import Path

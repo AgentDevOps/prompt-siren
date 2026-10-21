@@ -74,22 +74,30 @@ Return one JSON object conforming to the supplied schema, without Markdown fence
 
 
 def with_preceding_context(
-    chain: dict[str, Any], messages: Sequence[Any], before: int
+    chain: dict[str, Any], messages: Sequence[Any], before: int, after: int = 0
 ) -> dict[str, Any]:
     """Add up to ``before`` preceding non-assistant messages (task, tool results) of every chain
-    assistant message to the judge's evidence. They are never selectable candidates, and nothing
-    after a candidate is added, so the outcome of the run stays hidden."""
-    if before <= 0:
+    assistant message to the judge's evidence, and with ``after`` up to that many of the
+    non-assistant messages that directly follow it (its own tool results, up to the next assistant
+    message). They are never selectable candidates. Later assistant messages are never added, so
+    the agent's later choices, and hence the outcome of the run, stay hidden; a replay from right
+    after the message re-executes its tool call, so its result is part of the replayed state."""
+    if before <= 0 and after <= 0:
         return chain
     serialized = messages_to_dicts(messages)
     indices = set(_referenced_message_indices(chain))
     for index in list(indices):
         if 0 <= index < len(serialized) and serialized[index].get("kind") == "response":
-            indices.update(
-                previous
-                for previous in range(max(0, index - before), index)
-                if serialized[previous].get("kind") != "response"
-            )
+            if before > 0:
+                indices.update(
+                    previous
+                    for previous in range(max(0, index - before), index)
+                    if serialized[previous].get("kind") != "response"
+                )
+            for following in range(index + 1, min(len(serialized), index + 1 + after)):
+                if serialized[following].get("kind") == "response":
+                    break
+                indices.add(following)
     return {**chain, "attack_message_indices": sorted(indices)}
 
 

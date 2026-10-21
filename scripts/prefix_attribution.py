@@ -280,6 +280,8 @@ def run_config(args: argparse.Namespace) -> dict[str, Any]:
         config["attribution_skill"] = str(args.attribution_skill)
     if args.context_before:
         config["context_before"] = args.context_before
+    if args.context_after:
+        config["context_after"] = args.context_after
     if args.scores:
         config["scores"] = True
     if args.flag_threshold is not None:
@@ -718,7 +720,9 @@ async def evaluate_prefix(
             assert attribution_model is not None
             attribution_model_name = args.attribution_model or args.model
             attribution = await attribute_attack_chain_safely(
-                with_preceding_context(chain, prefix_messages, args.context_before),
+                with_preceding_context(
+                    chain, prefix_messages, args.context_before, args.context_after
+                ),
                 prefix_messages,
                 trajectory_id=str(
                     chain.get("run_id")
@@ -955,6 +959,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Show the attribution judge up to N preceding tool/user messages per candidate.",
     )
     skill.add_argument(
+        "--context-after",
+        type=int,
+        default=0,
+        help="Show the judge up to N tool/user messages right after each candidate, if they are "
+        "in the prefix (at runtime the latest message's own result is not available yet).",
+    )
+    skill.add_argument(
         "--scores",
         action="store_true",
         help="Ask the attribution judge for a 0-100 risk_score per candidate.",
@@ -1041,8 +1052,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--stop-after-harm needs --harm-signatures")
     if args.flag_threshold is not None and not args.scores:
         parser.error("--flag-threshold needs --scores")
-    if args.context_before < 0:
-        parser.error("--context-before must be non-negative")
+    if args.context_before < 0 or args.context_after < 0:
+        parser.error("--context-before and --context-after must be non-negative")
     if args.reuse_chains_from is not None and (args.output_dir is None or args.checkpoints):
         parser.error("--reuse-chains-from needs --output-dir and works on prefix sweeps only")
     args.attribution_system_prompt = (
