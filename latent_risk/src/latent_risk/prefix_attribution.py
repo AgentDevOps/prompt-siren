@@ -1,8 +1,8 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """Attack-chain extraction and attribution on truncated (prefix) trajectories.
 
-The full-trajectory workflow (``scripts/judge_attack_chains.py`` followed by
-``scripts/attribute_attack_chains.py``) sees every message of a completed run. A
+The full-trajectory workflow (``latent_risk/scripts/judge_attack_chains.py`` followed by
+``latent_risk/scripts/attribute_attack_chains.py``) sees every message of a completed run. A
 runtime monitor only ever sees a prefix: the messages produced so far. This module
 replays the same extraction and attribution steps on ``messages[:keep_count]`` so
 their behavior can be studied as a function of how much of the trajectory has been
@@ -149,7 +149,7 @@ async def extract_prefix_chain(
     semantic_precision: bool = False,
     context_note: str | None = PREFIX_CHAIN_NOTICE,
 ) -> dict[str, Any]:
-    """Run the same retrieval + judge steps as ``scripts/judge_attack_chains.py`` on a prefix.
+    """Run the same retrieval + judge steps as ``latent_risk/scripts/judge_attack_chains.py`` on a prefix.
 
     Codebook labeling is intentionally omitted: attribution never reads codes.
     """

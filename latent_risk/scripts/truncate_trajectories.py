@@ -14,9 +14,12 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
-from prompt_siren.job.models import CONFIG_FILENAME, TASK_EXECUTION_METADATA_FILENAME
-from prompt_siren.job.naming import sanitize_for_filename
-from prompt_siren.trajectory_labeling import label_trajectory, LEVEL_RANK, LEVELS, UptakeLevel
+from latent_risk.benchmark import (
+    CONFIG_FILENAME,
+    sanitize_for_filename,
+    TASK_EXECUTION_METADATA_FILENAME,
+)
+from latent_risk.trajectory_labeling import label_trajectory, LEVEL_RANK, LEVELS, UptakeLevel
 
 CutSource = Literal["first_occurrence", "first_reach"]
 PayloadMatch = Literal["content", "vector_id", "content_or_vector_id"]
@@ -1090,7 +1093,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--attribution-source",
         default="attack_chain_attribution.json",
-        help="Adjacent attribution JSON file produced by scripts/attribute_attack_chains.py.",
+        help="Adjacent attribution JSON file produced by latent_risk/scripts/attribute_attack_chains.py.",
     )
     parser.add_argument(
         "--allow-already-succeeded",

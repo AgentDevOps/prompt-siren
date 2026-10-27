@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
-from .types import (
+from .benchmark_types import (
     InjectableModelMessagesTypeAdapter,
     InjectionAttack,
     InjectionAttacksDictTypeAdapter,

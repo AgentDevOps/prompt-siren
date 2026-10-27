@@ -174,7 +174,11 @@ def _render_unit_document(document: str, max_chars: int) -> list[str]:
     """Render a canonical unit like the source-separated execution history."""
     matches = list(_UNIT_SECTION_RE.finditer(document))
     if not matches:
-        return ["##### Source: `unit-text`", "", *_fenced_block(_truncate_middle(document, max_chars), "text")]
+        return [
+            "##### Source: `unit-text`",
+            "",
+            *_fenced_block(_truncate_middle(document, max_chars), "text"),
+        ]
 
     sections: list[tuple[str, dict[str, str], str]] = []
     for index, match in enumerate(matches):
@@ -189,7 +193,9 @@ def _render_unit_document(document: str, max_chars: int) -> list[str]:
     lines: list[str] = []
     for name, metadata, body in sections:
         if name in {"THOUGHT", "NEXT_THOUGHT"}:
-            source_label = "assistant-text" if name == "THOUGHT" else "assistant-text (next message)"
+            source_label = (
+                "assistant-text" if name == "THOUGHT" else "assistant-text (next message)"
+            )
             lines.extend(
                 [
                     f"##### Source: `{source_label}`",
@@ -547,9 +553,7 @@ def render_attack_candidate_report(
                 assignments_by_topic[int(assignment["topic_id"])].append(assignment)
         lines.extend([f"## Group: `{group_name}`", ""])
         lines.extend(
-            _render_group_payloads(
-                _group_attack_contexts(job_dir, group, attack_context_cache)
-            )
+            _render_group_payloads(_group_attack_contexts(job_dir, group, attack_context_cache))
         )
         lines.extend(
             [

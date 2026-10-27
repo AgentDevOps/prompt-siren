@@ -7,14 +7,14 @@ attack_chain_labeled.json, execution.json, or any other chain/coding output.
 
 Examples:
     # Preview everything found under a job group (no files are touched).
-    uv run python scripts/clean_attack_chain_attribution.py jobs/my_job
+    uv run python latent_risk/scripts/clean_attack_chain_attribution.py jobs/my_job
 
     # Delete only trajectories that failed to attribute.
-    uv run python scripts/clean_attack_chain_attribution.py jobs/my_job \\
+    uv run python latent_risk/scripts/clean_attack_chain_attribution.py jobs/my_job \\
         --status failed --apply
 
     # Delete stale attribution left over from a run that predates --failed-only.
-    uv run python scripts/clean_attack_chain_attribution.py jobs/my_job \\
+    uv run python latent_risk/scripts/clean_attack_chain_attribution.py jobs/my_job \\
         --only-succeeded-attacks --apply
 """
 

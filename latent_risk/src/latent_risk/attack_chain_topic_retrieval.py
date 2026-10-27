@@ -16,8 +16,8 @@ from .attack_relation_classification import (
     build_attack_relation_analysis,
     normalize_document,
 )
+from .benchmark_types import InjectionAttack
 from .trajectory_labeling import messages_to_dicts, serializable_attacks
-from .types import InjectionAttack
 
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 VERBATIM_PAYLOAD_MIN_CHARS = 32
@@ -89,9 +89,7 @@ def _source_separated_retrieval_units(
     """Embed source-separated messages, but never semantic transition units."""
     source_events = getattr(analysis, "source_events", None)
     non_transition_units = [
-        unit
-        for unit in analysis.units
-        if unit.unit_type != "observation_to_agent_transition"
+        unit for unit in analysis.units if unit.unit_type != "observation_to_agent_transition"
     ]
     if not isinstance(source_events, list):
         return non_transition_units
@@ -133,8 +131,7 @@ def _deterministic_next_assistant_indices(
             if message.get("kind") != "response":
                 continue
             if any(
-                isinstance(part, dict)
-                and part.get("part_kind") in {"text", "tool-call"}
+                isinstance(part, dict) and part.get("part_kind") in {"text", "tool-call"}
                 for part in message.get("parts", [])
             ):
                 selected.add(message_index)
@@ -484,14 +481,10 @@ def retrieve_attack_chain_candidates(
     selected_message_indices.update(matching_tool_call_indices)
     selected_message_indices.update(paired_tool_return_indices)
     selected_message_indices.update(verbatim_neighbor_indices)
-    selected_observation_indices = (
-        selected_message_indices & _tool_return_message_indices(messages)
-    )
+    selected_observation_indices = selected_message_indices & _tool_return_message_indices(messages)
     deterministic_transition_neighbor_indices = _deterministic_next_assistant_indices(
         messages,
-        set(exposure_indices)
-        | selected_observation_indices
-        | set(paired_tool_return_indices),
+        set(exposure_indices) | selected_observation_indices | set(paired_tool_return_indices),
     )
     selected_message_indices.update(deterministic_transition_neighbor_indices)
     candidate_paired_return_indices = _paired_tool_return_indices(

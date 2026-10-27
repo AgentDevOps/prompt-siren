@@ -39,16 +39,16 @@ outputs and no ``execution.json`` is written, so the existing scripts never pick
 
 Examples:
     # Already-cut trajectories, evaluated exactly at their cut, outputs in rq3/.
-    uv run python scripts/prefix_attribution.py truncated --checkpoints \\
+    uv run python latent_risk/scripts/prefix_attribution.py truncated --checkpoints \\
         --model MODEL_NAME --semantic-precision --codebook open_coding/codebook.md \\
         --output-dir rq3
 
     # Runtime simulation: re-extract + attribute after every assistant message.
-    uv run python scripts/prefix_attribution.py jobs/my_job \\
+    uv run python latent_risk/scripts/prefix_attribution.py jobs/my_job \\
         --model MODEL_NAME --semantic-precision --every-response
 
     # Oracle ablation: full chain restricted to each prefix, attribution only.
-    uv run python scripts/prefix_attribution.py jobs/my_job \\
+    uv run python latent_risk/scripts/prefix_attribution.py jobs/my_job \\
         --model MODEL_NAME --chain-mode restrict-full --fraction 0.25 0.5 0.75 1.0
 """
 
@@ -63,32 +63,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+LATENT_RISK_ROOT = Path(__file__).resolve().parents[1]
+if str(LATENT_RISK_ROOT) not in sys.path:
+    sys.path.insert(0, str(LATENT_RISK_ROOT))
 
-from prompt_siren.attack_chain_attribution import (  # noqa: E402
+from latent_risk.attack_chain_attribution import (  # noqa: E402
     attribute_attack_chain_safely,
     build_attribution_system_prompt,
     render_attribution_markdown,
     with_preceding_context,
 )
-from prompt_siren.attack_chain_codebook_labeling import (  # noqa: E402
+from latent_risk.attack_chain_codebook_labeling import (  # noqa: E402
     label_attack_chain_safely,
     parse_codebook,
 )
-from prompt_siren.attack_chain_judge import (  # noqa: E402
+from latent_risk.attack_chain_judge import (  # noqa: E402
     attack_context_items,
     render_attack_chain_markdown,
 )
-from prompt_siren.job.models import (  # noqa: E402
+from latent_risk.benchmark import (  # noqa: E402
     CONFIG_FILENAME,
+    infer_model,
     TASK_ATTACK_CHAIN_JUDGE_FILENAME,
     TASK_ATTACK_CHAIN_JUDGE_MARKDOWN_FILENAME,
     TASK_EXECUTION_FILENAME,
     TASK_EXECUTION_METADATA_FILENAME,
 )
-from prompt_siren.prefix_attribution import (  # noqa: E402
+from latent_risk.prefix_attribution import (  # noqa: E402
     CHAIN_MODES,
     ChainMode,
     checkpoint_summary_row,
@@ -111,11 +112,9 @@ from prompt_siren.prefix_attribution import (  # noqa: E402
     select_prefix_lengths,
     summarize_timeline,
 )
-from prompt_siren.providers import infer_model  # noqa: E402
-from prompt_siren.trajectory_labeling import messages_to_dicts  # noqa: E402
+from latent_risk.trajectory_labeling import messages_to_dicts  # noqa: E402
 from pydantic_ai.models import Model  # noqa: E402
 from pydantic_ai.settings import ModelSettings  # noqa: E402
-
 from scripts.attribute_attack_chains import (  # noqa: E402
     create_attribution_model,
     default_attacker_objective,
@@ -916,7 +915,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help=(
             "JSON mapping a task_id substring to regexes that identify the attacker's "
-            "harmful operation in a tool call (see scripts/harm_signatures.json). Enables "
+            "harmful operation in a tool call (see latent_risk/scripts/harm_signatures.json). Enables "
             "harm-step detection and writes detection_summary.{md,jsonl}."
         ),
     )

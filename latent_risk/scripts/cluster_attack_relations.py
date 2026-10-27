@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
-from prompt_siren.attack_relation_classification import normalize_document
+from latent_risk.attack_relation_classification import normalize_document
 
 ANALYSIS_FILENAME = "attack_analysis_units.json"
 DocumentView = Literal["raw", "normalized"]

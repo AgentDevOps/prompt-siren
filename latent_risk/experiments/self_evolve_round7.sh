@@ -24,14 +24,14 @@
 #          so they can't push the earlier, replay-relevant messages out of the top 3
 #   fix 4  six task pairs are held out *before* evolving and never seen by the loop
 #
-#   experiments/self_evolve_round7.sh run              # verify v1's flags, then evolve from v1
-#   experiments/self_evolve_round7.sh status
-#   experiments/self_evolve_round7.sh holdout-cost     # held-out: attribute, print replay cost
-#   experiments/self_evolve_round7.sh holdout [K/N]    # held-out: replay-label flags + report
-#   experiments/self_evolve_round7.sh curve-cost       # learning curve: every accepted version
-#   experiments/self_evolve_round7.sh curve [K/N]      #   on the held-out task pairs (overfitting
+#   latent_risk/experiments/self_evolve_round7.sh run              # verify v1's flags, then evolve from v1
+#   latent_risk/experiments/self_evolve_round7.sh status
+#   latent_risk/experiments/self_evolve_round7.sh holdout-cost     # held-out: attribute, print replay cost
+#   latent_risk/experiments/self_evolve_round7.sh holdout [K/N]    # held-out: replay-label flags + report
+#   latent_risk/experiments/self_evolve_round7.sh curve-cost       # learning curve: every accepted version
+#   latent_risk/experiments/self_evolve_round7.sh curve [K/N]      #   on the held-out task pairs (overfitting
 #                                                      #   check: does held-out follow training?)
-#   experiments/self_evolve_round7.sh export           # write all replay labels into jobs/groups
+#   latent_risk/experiments/self_evolve_round7.sh export           # write all replay labels into jobs/groups
 #
 # Results: $STATE/log.md (loop), ${STATE}_holdout/report.md (held-out).
 #
@@ -48,14 +48,14 @@
 #   REPLAY_CONCURRENCY [3]  replays of one message run in parallel (same Docker image)
 #   ENV_FILE [.env]
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 STATE="${STATE:-truncated/self_evolve_r7}"
 LABEL_CONCURRENCY="${LABEL_CONCURRENCY:-1}"
 ENV_FILE="${ENV_FILE:-.env}"
 UV=(uv run)
 [ -f "$ENV_FILE" ] && UV+=(--env-file "$ENV_FILE")
-EVOLVE=("${UV[@]}" --extra topics python scripts/self_evolve_attribution.py)
+EVOLVE=("${UV[@]}" --extra topics python latent_risk/scripts/self_evolve_attribution.py)
 
 # Test task pairs: drawn once (seeded) among task pairs of the current dataset, redrawn until they
 # hold TEST_MIN_POSITIVES verified dangerous messages; stored so the split never changes.
@@ -127,6 +127,6 @@ case "${1:-}" in
     "${EVOLVE[@]}" holdout "${COMMON[@]}" --versions $(accepted_versions) --label \
       --label-concurrency "$LABEL_CONCURRENCY" "${part[@]}"
     ;;
-  export) "${UV[@]}" python scripts/self_evolve_attribution.py export-labels ;;
+  export) "${UV[@]}" python latent_risk/scripts/self_evolve_attribution.py export-labels ;;
   *) sed -n '2,49p' "$0"; exit 1 ;;
 esac

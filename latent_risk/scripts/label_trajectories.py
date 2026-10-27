@@ -13,10 +13,10 @@ from typing import Any
 
 import yaml
 
-DEFAULT_OLD_PATH_AUDIT_RUBRIC = Path("docs/labeling/old_path_6level_rubric.md")
+DEFAULT_OLD_PATH_AUDIT_RUBRIC = Path("latent_risk/docs/labeling/old_path_6level_rubric.md")
 
-from prompt_siren.providers import infer_model
-from prompt_siren.trajectory_labeling import (
+from latent_risk.benchmark import infer_model
+from latent_risk.trajectory_labeling import (
     JudgeAuditSettings,
     label_trajectory,
     label_trajectory_async,
@@ -186,13 +186,15 @@ async def label_execution(
                 judge_agent_messages_only=not message_judge_all_messages,
             ),
             progress_callback=(
-                lambda current, total: print(
-                    f"    message {current}/{total}",
-                    file=sys.stderr,
-                    flush=True,
+                lambda current, total: (
+                    print(
+                        f"    message {current}/{total}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    if show_message_progress
+                    else None
                 )
-                if show_message_progress
-                else None
             ),
         )
     else:
@@ -304,9 +306,7 @@ def parse_prior_context_window(value: str) -> int | None:
     try:
         window = int(normalized)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "must be a non-negative integer or 'all'"
-        ) from exc
+        raise argparse.ArgumentTypeError("must be a non-negative integer or 'all'") from exc
     if window < 0:
         raise argparse.ArgumentTypeError("must be non-negative or 'all'")
     return window
@@ -497,7 +497,11 @@ async def async_main(argv: list[str] | None = None) -> int:
                 show_message_progress=args.message_progress,
                 output_format=args.output_format,
             )
-            output_path = output_root if write_single_json else mirrored_execution_output_path(output_root, path)
+            output_path = (
+                output_root
+                if write_single_json
+                else mirrored_execution_output_path(output_root, path)
+            )
             write_pretty_json(record, output_path)
             print(f"[{index}/{total}] wrote {output_path}", file=sys.stderr, flush=True)
         return 0

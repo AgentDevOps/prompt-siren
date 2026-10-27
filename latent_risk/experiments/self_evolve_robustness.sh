@@ -2,8 +2,8 @@
 # Robustness check: repeat round variants with a different validation draw (and a fresh optimiser
 # path), keeping round 7's test task pairs, so the variants can be compared more than once.
 #
-#   experiments/self_evolve_robustness.sh run      # every mode in MODES: baseline, iterations, curve
-#   experiments/self_evolve_robustness.sh report   # one table: the original runs and the repeats
+#   latent_risk/experiments/self_evolve_robustness.sh run      # every mode in MODES: baseline, iterations, curve
+#   latent_risk/experiments/self_evolve_robustness.sh report   # one table: the original runs and the repeats
 #
 # Modes (each its own state truncated/self_evolve_robust_s<SEED>_<mode>):
 #   verbatim   = round 7 (rules supporting a correct pick are frozen)
@@ -15,7 +15,7 @@
 #   SEED [1]  validation seed of the repeat     MODES ["verbatim behaviour"]
 #   ITERATIONS [3]  evolution iterations       (plus the variables of the round scripts)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 SEED="${SEED:-1}"
 MODES="${MODES:-verbatim behaviour}"
@@ -27,10 +27,10 @@ UV=(uv run)
 
 script_for() {
   case "$1" in
-    verbatim) echo experiments/self_evolve_round7.sh ;;
-    behaviour) echo experiments/self_evolve_round8.sh ;;
-    tolerant) echo experiments/self_evolve_round9.sh ;;
-    explore) echo experiments/self_evolve_round10.sh ;;
+    verbatim) echo latent_risk/experiments/self_evolve_round7.sh ;;
+    behaviour) echo latent_risk/experiments/self_evolve_round8.sh ;;
+    tolerant) echo latent_risk/experiments/self_evolve_round9.sh ;;
+    explore) echo latent_risk/experiments/self_evolve_round10.sh ;;
     *) echo "unknown mode $1" >&2; exit 1 ;;
   esac
 }

@@ -9,17 +9,17 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from prompt_siren.attack_chain_codebook_labeling import label_attack_chain_safely
-from prompt_siren.attack_chain_judge import judge_attack_chain, render_attack_chain_markdown
-from prompt_siren.attack_chain_topic_retrieval import retrieve_attack_chain_candidates
-from prompt_siren.job.models import (
+from latent_risk.attack_chain_codebook_labeling import label_attack_chain_safely
+from latent_risk.attack_chain_judge import judge_attack_chain, render_attack_chain_markdown
+from latent_risk.attack_chain_topic_retrieval import retrieve_attack_chain_candidates
+from latent_risk.benchmark import (
+    infer_model,
     TASK_ATTACK_CHAIN_JUDGE_FILENAME,
     TASK_ATTACK_CHAIN_JUDGE_MARKDOWN_FILENAME,
     TASK_EXECUTION_FILENAME,
     TASK_EXECUTION_METADATA_FILENAME,
     TASK_RESULT_FILENAME,
 )
-from prompt_siren.providers import infer_model
 
 ExtractionStatus = Literal["created", "skipped", "would_create", "failed"]
 

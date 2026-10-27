@@ -188,7 +188,7 @@ class TrajectoryLabelingConfig(BaseModel):
         description="Run a final LLM audit pass over hybrid labels using a markdown rubric.",
     )
     old_path_audit_rubric: Path = Field(
-        default=Path("docs/labeling/old_path_6level_rubric.md"),
+        default=Path("latent_risk/docs/labeling/old_path_6level_rubric.md"),
         description="Markdown rubric used by the old/hybrid path LLM audit judge.",
     )
     old_path_audit_max_attempts: int = Field(

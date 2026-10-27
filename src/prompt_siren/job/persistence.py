@@ -14,6 +14,15 @@ from typing import Any, TypeVar
 import logfire
 import yaml
 from filelock import FileLock
+from latent_risk.attack_chain_judge import AttackChainJudgeAnalysis, render_attack_chain_markdown
+from latent_risk.attack_relation_classification import AttackRelationAnalysis
+from latent_risk.attack_success_cases import record_attack_success_case
+from latent_risk.trajectory_labeling import (
+    label_trajectory,
+    LEVEL_RANK,
+    TrajectoryLabels,
+    UptakeLevel,
+)
 from logfire import LogfireSpan
 from pydantic_ai.messages import (
     ModelMessage,
@@ -24,11 +33,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from ..attack_chain_judge import AttackChainJudgeAnalysis, render_attack_chain_markdown
-from ..attack_relation_classification import AttackRelationAnalysis
-from ..attack_success_cases import record_attack_success_case
 from ..tasks import EvaluationResult, Task, TaskCouple
-from ..trajectory_labeling import label_trajectory, LEVEL_RANK, TrajectoryLabels, UptakeLevel
 from ..types import (
     InjectableModelMessagesTypeAdapter,
     InjectableToolReturnPart,

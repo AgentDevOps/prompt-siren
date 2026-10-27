@@ -34,11 +34,11 @@ from typing import Any
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+LATENT_RISK_ROOT = Path(__file__).resolve().parents[1]
+if str(LATENT_RISK_ROOT) not in sys.path:
+    sys.path.insert(0, str(LATENT_RISK_ROOT))
 
-from prompt_siren.job.models import TaskRunExecution, TaskRunResumeState  # noqa: E402
+from latent_risk.benchmark import TaskRunExecution, TaskRunResumeState  # noqa: E402
 
 from scripts import (  # noqa: E402
     attribution_replay_study as study,
@@ -136,7 +136,7 @@ def plan(args: argparse.Namespace) -> None:
             code = study.run_command(
                 [
                     sys.executable,
-                    "scripts/truncate_trajectories.py",
+                    "latent_risk/scripts/truncate_trajectories.py",
                     str(sources.runs[key] / "execution.json"),
                     "--skip-labels",
                     "--keep-message-count",

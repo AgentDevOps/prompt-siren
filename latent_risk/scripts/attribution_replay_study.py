@@ -19,8 +19,8 @@ the current state without doing anything.
 
 Run with the topics extra (chain extraction needs BERTopic) and your API key in .env:
 
-    uv run --env-file .env --extra topics python scripts/attribution_replay_study.py plan
-    uv run --env-file .env --extra topics python scripts/attribution_replay_study.py all
+    uv run --env-file .env --extra topics python latent_risk/scripts/attribution_replay_study.py plan
+    uv run --env-file .env --extra topics python latent_risk/scripts/attribution_replay_study.py all
 """
 
 from __future__ import annotations
@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from prompt_siren.prefix_attribution import (
+from latent_risk.benchmark import replay_command
+from latent_risk.prefix_attribution import (
     harm_message_index,
     harm_patterns_for_task,
     load_harm_signatures,
@@ -144,7 +145,7 @@ def stage_judge(job: Job, args: argparse.Namespace) -> None:
     code = run_command(
         [
             sys.executable,
-            "scripts/judge_attack_chains.py",
+            "latent_risk/scripts/judge_attack_chains.py",
             str(job.path),
             "--model",
             args.judge_model,
@@ -164,7 +165,7 @@ def stage_attribute(job: Job, args: argparse.Namespace) -> None:
     code = run_command(
         [
             sys.executable,
-            "scripts/attribute_attack_chains.py",
+            "latent_risk/scripts/attribute_attack_chains.py",
             str(job.path),
             "--model",
             args.attribution_model,
@@ -251,7 +252,7 @@ def stage_cut(cut: Cut, args: argparse.Namespace) -> None:
     code = run_command(
         [
             sys.executable,
-            "scripts/truncate_trajectories.py",
+            "latent_risk/scripts/truncate_trajectories.py",
             str(cut.run_dir / "execution.json"),
             "--attribution-rank",
             "1",
@@ -309,21 +310,9 @@ def stage_replay(cut: Cut, args: argparse.Namespace) -> None:
         if not args.dry_run:
             parked.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(run_dir), str(parked))
-    command = [
-        sys.executable,
-        "-m",
-        "prompt_siren.cli",
-        "jobs",
-        "resume",
-        "-p",
-        str(cut.cut_dir),
-        "-e",
-        "",
-        "--partial-repeats",
-        str(args.replays - completed),
-    ]
-    if args.replay_concurrency > 1:
-        command.append(f"execution.concurrency={args.replay_concurrency}")
+    command = replay_command(
+        sys.executable, cut.cut_dir, args.replays - completed, args.replay_concurrency
+    )
     run_command(command, dry_run=args.dry_run)
 
 
@@ -541,7 +530,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--harm-signatures",
         type=Path,
-        default=Path("scripts/harm_signatures.json"),
+        default=Path("latent_risk/scripts/harm_signatures.json"),
         help="per-task regexes locating the attack action (to classify cut positions)",
     )
     args = parser.parse_args(argv)

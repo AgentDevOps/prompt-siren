@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from prompt_siren.attack_chain_open_coding import (
+from latent_risk.attack_chain_open_coding import (
     ATTACK_IRRELEVANT_CODE_ID,
     backcode_units,
     build_coding_clusters,
@@ -23,7 +23,7 @@ from prompt_siren.attack_chain_open_coding import (
     organize_themes,
     render_open_coding_review,
 )
-from prompt_siren.providers import infer_model
+from latent_risk.benchmark import infer_model
 
 
 def _write_text_atomic(path: Path, content: str) -> None:

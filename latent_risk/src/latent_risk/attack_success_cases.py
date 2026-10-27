@@ -7,9 +7,7 @@ from pathlib import Path
 
 from filelock import FileLock
 
-ATTACK_SUCCESS_CASES_PATH = (
-    Path(__file__).resolve().parents[2] / "docs" / "attack_success_cases.md"
-)
+ATTACK_SUCCESS_CASES_PATH = Path(__file__).resolve().parents[2] / "docs" / "attack_success_cases.md"
 
 _COLUMNS = ("task", "model", "attack_score", "job", "run_id")
 _HEADERS = {
@@ -142,9 +140,7 @@ def _write_rows(path: Path, rows: list[dict[str, str]]) -> None:
             continue
         seen.add(key)
         rendered.append(
-            "| "
-            + " | ".join(_escape_cell(row.get(column, "-")) for column in _COLUMNS)
-            + " |"
+            "| " + " | ".join(_escape_cell(row.get(column, "-")) for column in _COLUMNS) + " |"
         )
 
     rendered.append("")

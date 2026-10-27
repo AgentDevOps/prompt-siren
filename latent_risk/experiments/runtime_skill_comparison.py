@@ -1,6 +1,6 @@
 """Compare attribution skills (e.g. v1 vs an evolved skill) as runtime monitors.
 
-Two run sets, each monitored once per skill with ``scripts/prefix_attribution.py``
+Two run sets, each monitored once per skill with ``latent_risk/scripts/prefix_attribution.py``
 (``--every-response --stop-at-first-flag --stop-after-harm``, scored attribution with the skill's
 own flag threshold, chains shared between skills via ``--reuse-chains-from``):
 
@@ -26,7 +26,7 @@ from typing import Any
 
 from scipy.stats import binomtest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+LATENT_RISK_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = Path("rq3/runtime_skill")
 DEFAULT_LABELS = Path("truncated/self_evolve/labels.jsonl")
 DEFAULT_E1 = [Path("rq3/e1_high_asr"), Path("rq3/e1_high_asr_left")]

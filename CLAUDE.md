@@ -207,6 +207,12 @@ uv run prompt-siren run attack --config-dir=./my_config
 14. **Supporting Modules**
     - `tools_utils.py` - Utilities for tool handling
 
+15. **Latent-risk research package** (`latent_risk/`, see `latent_risk/README.md`)
+    - Attack-chain extraction, attribution, checkpoint replay, the self-evolving attribution loop and the study's experiments
+    - Separate installable package (`latent-risk`), an editable path dependency of prompt-siren; prompt-siren's runner imports it for online trajectory labeling
+    - Benchmark-specific code only in `latent_risk/src/latent_risk/benchmark.py` and `benchmark_types.py`
+    - CLI tools in `latent_risk/scripts/`, experiment drivers in `latent_risk/experiments/`, tests in `latent_risk/tests/`; run everything from the repository root
+
 ### Task Selection
 
 Task selection is configured via the `task_ids` field in `ExperimentConfig`:

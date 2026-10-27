@@ -14,8 +14,8 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
+from .benchmark_types import InjectionAttack
 from .trajectory_labeling import messages_to_dicts, serializable_attacks
-from .types import InjectionAttack
 
 AttackChainRole = Literal[
     "payload_exposure",
@@ -260,8 +260,7 @@ def _role_candidate_indices(records: Sequence[Mapping[str, Any]]) -> dict[str, l
                 record["message_index"]
                 for record in records
                 if isinstance(record.get("message_index"), int)
-                and role
-                in _allowed_roles_for_source(str(record.get("source", "unknown")))
+                and role in _allowed_roles_for_source(str(record.get("source", "unknown")))
             }
         )
         for role in ATTACK_CHAIN_ROLES
@@ -453,9 +452,7 @@ def _validate_message_selections(
             sources_by_message.setdefault(message_index, set()).add(source)
     for selection in output.message_selections:
         sources = sources_by_message.get(selection.message_index, set())
-        allowed_roles = {
-            role for source in sources for role in _allowed_roles_for_source(source)
-        }
+        allowed_roles = {role for source in sources for role in _allowed_roles_for_source(source)}
         invalid_roles = [role for role in selection.roles if role not in allowed_roles]
         if invalid_roles:
             raise ValueError(
@@ -516,11 +513,7 @@ def _expand_tool_message_selections(
     signatures_by_message, messages_by_call_id = _message_tool_facts(messages)
     selected_indices = {selection.message_index for selection in selections}
     expansion_seed_indices = (
-        {
-            selection.message_index
-            for selection in selections
-            if "attack_action" in selection.roles
-        }
+        {selection.message_index for selection in selections if "attack_action" in selection.roles}
         if attack_actions_only
         else selected_indices
     )
@@ -856,9 +849,7 @@ def _is_agent_thought_action_message(message: Mapping[str, Any]) -> bool:
     if message.get("kind") != "response":
         return False
     part_kinds = {
-        part.get("part_kind")
-        for part in message.get("parts", [])
-        if isinstance(part, Mapping)
+        part.get("part_kind") for part in message.get("parts", []) if isinstance(part, Mapping)
     }
     return bool(part_kinds & {"text", "thinking"}) and "tool-call" in part_kinds
 
@@ -871,14 +862,20 @@ def render_attack_chain_markdown(
     serialized_messages = messages_to_dicts(messages or [])
     referenced_indices = _referenced_message_indices(payload)
     coding = payload.get("codebook_labeling") or {}
-    labels = {
-        item["message_index"]: item
-        for item in coding.get("labels", [])
-        if isinstance(item, Mapping) and isinstance(item.get("message_index"), int)
-    } if coding.get("status") == "completed" else {}
+    labels = (
+        {
+            item["message_index"]: item
+            for item in coding.get("labels", [])
+            if isinstance(item, Mapping) and isinstance(item.get("message_index"), int)
+        }
+        if coding.get("status") == "completed"
+        else {}
+    )
     lines = ["# Attack-chain messages", ""]
     if coding.get("status") == "failed":
-        lines.extend(["_Automatic codebook labeling failed; no automatic labels were applied._", ""])
+        lines.extend(
+            ["_Automatic codebook labeling failed; no automatic labels were applied._", ""]
+        )
     rendered = 0
     for message_index in referenced_indices:
         if message_index >= len(serialized_messages):
@@ -894,11 +891,13 @@ def render_attack_chain_markdown(
                 lines.extend(_render_message_part(part))
         if _is_agent_thought_action_message(message) and message_index in labels:
             label = labels[message_index]
-            lines.extend([
-                f"- Thought Code: {label['thought_code']}",
-                f"- Action Code: {label['action_code']}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"- Thought Code: {label['thought_code']}",
+                    f"- Action Code: {label['action_code']}",
+                    "",
+                ]
+            )
         rendered += 1
 
     if not rendered:

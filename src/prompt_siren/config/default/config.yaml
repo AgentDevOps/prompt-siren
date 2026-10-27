@@ -64,7 +64,7 @@ trajectory_labeling:
   l3_judge_enabled: true # Hybrid: use the agent model as an LLM judge for L3 verbal uptake
   l3_threshold: 7.0 # Hybrid: LLM judge score >= threshold is labeled L3
   old_path_audit_enabled: false # Hybrid: run final LLM audit over labels using a markdown rubric
-  old_path_audit_rubric: docs/labeling/old_path_6level_rubric.md
+  old_path_audit_rubric: latent_risk/docs/labeling/old_path_6level_rubric.md
   old_path_audit_max_attempts: 2
   judge_audit_max_attempts: 3 # Relevance judge: retries per message
   judge_audit_prior_window: 6 # Relevance judge: recent context window; null means all prior messages

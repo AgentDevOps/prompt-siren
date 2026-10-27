@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, TypeVar
 
+from latent_risk.trajectory_labeling import label_trajectory, LEVEL_RANK, UptakeLevel
 from pydantic import BaseModel, Field
 from pydantic_ai import AbstractToolset, Agent, AgentRunResult, InstrumentationSettings, UsageLimits
 from pydantic_ai.messages import ModelMessage
@@ -22,7 +23,6 @@ from ..agents.states import EndState, ExecutionState, ModelResponseState
 from ..environments.abstract import AbstractEnvironment, Snapshottable
 from ..providers import infer_model
 from ..tasks import BenignTask, EvaluationResult, MaliciousTask, Task, TaskResult
-from ..trajectory_labeling import label_trajectory, LEVEL_RANK, UptakeLevel
 from ..types import InjectionAttacksDict, InjectionVectorID, StrContentAttack
 from .attack_utils import run_until_injectable
 from .mini_goat_attack import GoatAttackerModel, MiniGoatAttack

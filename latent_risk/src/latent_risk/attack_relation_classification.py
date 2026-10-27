@@ -17,8 +17,8 @@ from typing import Any, Literal
 
 from pydantic_ai.messages import ModelMessage
 
+from .benchmark_types import InjectionAttack
 from .trajectory_labeling import collect_strings, messages_to_dicts, serializable_attacks
-from .types import InjectionAttack
 
 AnalysisUnitType = Literal[
     "agent_message",
@@ -444,9 +444,7 @@ def build_attack_relation_analysis(
             (event for event in next_events if event.source_type == "assistant-intent"),
             None,
         )
-        next_actions = [
-            event for event in next_events if event.source_type == "assistant-action"
-        ]
+        next_actions = [event for event in next_events if event.source_type == "assistant-action"]
         sections = [
             attack_section,
             "[UNIT=OBSERVATION_TO_AGENT_TRANSITION]",
@@ -484,9 +482,7 @@ def build_attack_relation_analysis(
                 to_message_id=f"m{next_index}",
                 observation_event_id=observation.event_id,
                 next_assistant_event_id=(
-                    next_intent.event_id
-                    if next_intent is not None
-                    else next_events[0].event_id
+                    next_intent.event_id if next_intent is not None else next_events[0].event_id
                 ),
                 metadata={
                     "observation_event_id": observation.event_id,

@@ -9,10 +9,10 @@ import json
 import os
 from pathlib import Path
 
-from prompt_siren.attack_chain_codebook_labeling import label_attack_chain_safely, parse_codebook
-from prompt_siren.attack_chain_judge import render_attack_chain_markdown
-from prompt_siren.attack_chain_open_coding import find_chain_sources
-from prompt_siren.providers import infer_model
+from latent_risk.attack_chain_codebook_labeling import label_attack_chain_safely, parse_codebook
+from latent_risk.attack_chain_judge import render_attack_chain_markdown
+from latent_risk.attack_chain_open_coding import find_chain_sources
+from latent_risk.benchmark import infer_model
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider

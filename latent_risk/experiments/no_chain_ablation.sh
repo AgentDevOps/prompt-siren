@@ -7,14 +7,14 @@
 # before the attack action as a candidate (--evidence trajectory). Only the attack payload context
 # is kept; the chain judge's selection and summary are not used. No evolving.
 #
-#   experiments/no_chain_ablation.sh run       # v1 on training + validation, verify its new flags
-#   experiments/no_chain_ablation.sh test      # v1 on the test task pairs (threshold from training)
-#   experiments/no_chain_ablation.sh report    # whole trajectory vs attack chain (round 7)
+#   latent_risk/experiments/no_chain_ablation.sh run       # v1 on training + validation, verify its new flags
+#   latent_risk/experiments/no_chain_ablation.sh test      # v1 on the test task pairs (threshold from training)
+#   latent_risk/experiments/no_chain_ablation.sh report    # whole trajectory vs attack chain (round 7)
 #
 # Environment (defaults in brackets): STATE [truncated/ablation_no_chain]
 #   REPLAY_CONCURRENCY [3]  LABEL_CONCURRENCY [1]  ENV_FILE [.env]
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 STATE="${STATE:-truncated/ablation_no_chain}"
 CHAIN_STATE="truncated/self_evolve_r7"   # the same setting with the attack chain
@@ -31,7 +31,7 @@ COMMON=(--state "$STATE" --evidence trajectory --exclude-after-attack --eval-all
   --holdout-tasks $HOLDOUT_TASKS --validation-tasks 2 --validation-seed 0
   --min-replays 5 --max-replays 10 --zero-safe-at 10
   --replay-concurrency "${REPLAY_CONCURRENCY:-3}" --label-concurrency "${LABEL_CONCURRENCY:-1}")
-EVOLVE=("${UV[@]}" --extra topics python scripts/self_evolve_attribution.py)
+EVOLVE=("${UV[@]}" --extra topics python latent_risk/scripts/self_evolve_attribution.py)
 
 case "${1:-}" in
   run) "${EVOLVE[@]}" run "${COMMON[@]}" --verify-baseline --label-budget 10 --max-iterations 0 ;;

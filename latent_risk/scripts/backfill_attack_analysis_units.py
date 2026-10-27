@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from prompt_siren.attack_relation_classification import build_attack_relation_analysis
-from prompt_siren.job.models import (
+from latent_risk.attack_relation_classification import build_attack_relation_analysis
+from latent_risk.benchmark import (
     TASK_ATTACK_ANALYSIS_FILENAME,
     TASK_EXECUTION_FILENAME,
     TASK_EXECUTION_METADATA_FILENAME,

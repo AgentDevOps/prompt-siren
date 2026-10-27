@@ -25,9 +25,9 @@ from typing import Any
 
 from scipy.stats import fisher_exact
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+LATENT_RISK_ROOT = Path(__file__).resolve().parents[1]
+if str(LATENT_RISK_ROOT) not in sys.path:
+    sys.path.insert(0, str(LATENT_RISK_ROOT))
 
 from scripts import (  # noqa: E402
     attribution_replay_study as study,

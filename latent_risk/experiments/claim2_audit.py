@@ -34,11 +34,11 @@ from typing import Any
 
 from scipy.stats import fisher_exact
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+LATENT_RISK_ROOT = Path(__file__).resolve().parents[1]
+if str(LATENT_RISK_ROOT) not in sys.path:
+    sys.path.insert(0, str(LATENT_RISK_ROOT))
 
-from prompt_siren.attack_chain_judge import _referenced_message_indices  # noqa: E402
+from latent_risk.attack_chain_judge import _referenced_message_indices  # noqa: E402
 
 from scripts import self_evolve_attribution as evolve  # noqa: E402
 

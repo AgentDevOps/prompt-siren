@@ -25,6 +25,22 @@ if sys.version_info < (3, 11):
 
 import anyio
 import logfire
+from latent_risk.attack_chain_judge import (
+    attack_context_items,
+    AttackChainJudgeAnalysis,
+    judge_attack_chain,
+)
+from latent_risk.attack_chain_topic_retrieval import retrieve_attack_chain_candidates
+from latent_risk.attack_relation_classification import (
+    AttackRelationAnalysis,
+    build_attack_relation_analysis,
+)
+from latent_risk.trajectory_labeling import (
+    JudgeAuditSettings,
+    label_trajectory_async,
+    label_trajectory_with_judge_audit,
+    TrajectoryLabels,
+)
 from logfire import LogfireSpan
 from pydantic_ai import InstrumentationSettings, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -44,16 +60,6 @@ from .agents.states import (
     ModelRequestState,
     ModelResponseState,
 )
-from .attack_chain_judge import (
-    attack_context_items,
-    AttackChainJudgeAnalysis,
-    judge_attack_chain,
-)
-from .attack_chain_topic_retrieval import retrieve_attack_chain_candidates
-from .attack_relation_classification import (
-    AttackRelationAnalysis,
-    build_attack_relation_analysis,
-)
 from .attacks.abstract import AbstractAttack
 from .environments.abstract import AbstractEnvironment
 from .job import JobPersistence
@@ -70,12 +76,6 @@ from .tasks import (
 from .telemetry.formatted_span import formatted_span
 from .telemetry.workbench_spans import create_attack_span, create_task_span
 from .tools_utils import run_tool_raw
-from .trajectory_labeling import (
-    JudgeAuditSettings,
-    label_trajectory_async,
-    label_trajectory_with_judge_audit,
-    TrajectoryLabels,
-)
 from .types import (
     InjectableRetryPromptPart,
     InjectableToolReturnPart,
@@ -411,7 +411,7 @@ async def _judge_attack_chain_for_result(
         if config.attack_chain_codebook_path:
             from pathlib import Path
 
-            from .attack_chain_codebook_labeling import label_attack_chain_safely
+            from latent_risk.attack_chain_codebook_labeling import label_attack_chain_safely
 
             analysis.codebook_labeling = await label_attack_chain_safely(
                 analysis.to_json(),

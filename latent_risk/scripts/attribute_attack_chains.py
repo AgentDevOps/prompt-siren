@@ -5,7 +5,7 @@ Every run (including a single trajectory) also writes a short Markdown summary
 listing which trajectories have ranked replay candidates and which don't.
 
 Example:
-    uv run python scripts/attribute_attack_chains.py jobs/my_job \\
+    uv run python latent_risk/scripts/attribute_attack_chains.py jobs/my_job \\
         --model MODEL_NAME --top-k 3 --failed-only
 """
 
@@ -19,12 +19,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
-from prompt_siren.attack_chain_attribution import (
+from latent_risk.attack_chain_attribution import (
     attribute_attack_chain_safely,
     render_attribution_markdown,
 )
-from prompt_siren.attack_chain_open_coding import find_chain_sources
-from prompt_siren.providers import infer_model
+from latent_risk.attack_chain_open_coding import find_chain_sources
+from latent_risk.benchmark import infer_model
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
