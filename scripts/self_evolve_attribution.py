@@ -63,6 +63,7 @@ from prompt_siren.attack_chain_attribution import (  # noqa: E402
     ATTRIBUTION_CRITERIA,
     ATTRIBUTION_PREAMBLE,
     build_attribution_system_prompt,
+    whole_trajectory_payload,
     with_preceding_context as with_context,
 )
 from prompt_siren.attack_chain_judge import _referenced_message_indices  # noqa: E402
@@ -745,7 +746,10 @@ async def attribute_runs(
         if chain is None:
             return
         messages = sources.messages(key)
-        chain = with_context(chain, messages, args.context_before, args.context_after)
+        if args.evidence == "trajectory":
+            chain = whole_trajectory_payload(chain, messages)
+        else:
+            chain = with_context(chain, messages, args.context_before, args.context_after)
         async with semaphore:
             result = await attribute_attack_chain_safely(
                 chain,
@@ -1957,6 +1961,8 @@ def full_settings(args: argparse.Namespace) -> dict[str, Any]:
         settings["eval_all_runs"] = True
     if args.context_after:
         settings["context_after"] = args.context_after
+    if args.evidence != "chain":
+        settings["evidence"] = args.evidence
     if args.validation_tasks:
         settings["validation_tasks"] = args.validation_tasks
         settings["validation_seed"] = args.validation_seed
@@ -2366,6 +2372,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=int,
         default=3,
         help="also show the judge up to N preceding non-assistant messages of each chain message",
+    )
+    parser.add_argument(
+        "--evidence",
+        choices=("chain", "trajectory"),
+        default="chain",
+        help="chain: the judge sees the extracted attack chain (default); trajectory: the whole "
+        "trajectory, every agent message a candidate (ablation without chain extraction)",
     )
     parser.add_argument(
         "--context-after",

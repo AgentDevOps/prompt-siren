@@ -101,6 +101,18 @@ def with_preceding_context(
     return {**chain, "attack_message_indices": sorted(indices)}
 
 
+def whole_trajectory_payload(chain: Mapping[str, Any], messages: Sequence[Any]) -> dict[str, Any]:
+    """Ablation input: the whole trajectory instead of the extracted attack chain.
+
+    Every message becomes evidence and every assistant message a candidate; only the attack
+    payload context (from the attack configuration, not the chain judge) is kept, so the chain
+    judge's selection and summary play no part."""
+    return {
+        "attack_context": chain.get("attack_context", []),
+        "attack_message_indices": list(range(len(messages))),
+    }
+
+
 def build_attribution_system_prompt(criteria: str) -> str:
     """Full system prompt: fixed preamble, the given criteria, fixed output contract."""
     return (
