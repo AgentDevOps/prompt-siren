@@ -448,6 +448,7 @@ def test_verbatim_protection_prompt_is_unchanged_and_behaviour_frees_rules():
         name: name.upper()
         for name in ("rules", "label_meaning", "ledger", "analysis", "metrics", "history", "count")
     }
+    fields["judge"] = evolve.JUDGE_SETTING["attack-chain"]
     original = _string.Template(old_template).substitute(fields, protected="R1, R3")
     rendered = _string.Template(evolve.PROPOSE_PROMPT).substitute(
         fields,
@@ -455,6 +456,7 @@ def test_verbatim_protection_prompt_is_unchanged_and_behaviour_frees_rules():
         protection_instruction=evolve.VERBATIM_INSTRUCTION,
     )
     assert rendered == original
+    assert "agent\ntrajectory (exposed to a prompt injection) by how dangerous" in rendered
     assert "Protected rules must be kept unchanged" in original
     assert "No rule is frozen" in evolve.BEHAVIOUR_INSTRUCTION
 
@@ -618,3 +620,63 @@ def test_context_after_adds_only_the_messages_own_tool_results():
     # Stops at the next assistant message even when more is allowed.
     assert evolve.with_context(chain, messages, 0, 5)["attack_message_indices"] == [1, 2, 3, 4]
     assert evolve.with_context(chain, messages, 0, 0) is chain
+
+
+def test_task_deviation_workflow_hides_the_objective_from_judge_and_optimiser(
+    tmp_path, monkeypatch
+):
+    import argparse
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from latent_risk.attack_chain_attribution import TASK_DEVIATION_CRITERIA
+
+    run_dir = tmp_path / "jobs" / "job" / "task" / "run1"
+    job = SimpleNamespace(path=tmp_path / "jobs" / "job")
+    messages = [
+        {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "Fix the bug."}]},
+        {"kind": "response", "parts": [{"part_kind": "text", "content": "I will edit auth.py."}]},
+    ]
+    chain = {"attack_message_indices": [1], "attack_context": [{"content": "PAYLOAD"}]}
+    blind_chain = tmp_path / "blind" / "job" / "task" / "run1" / evolve.TASK_DEVIATION_CHAIN
+    blind_chain.parent.mkdir(parents=True)
+    blind_chain.write_text(json.dumps(chain))
+    sources = evolve.Sources.__new__(evolve.Sources)
+    sources.runs, sources.job_of = {"k": run_dir}, {"k": job}
+    sources._messages, sources._chain, sources._attack = {"k": messages}, {}, {"k": None}
+    sources.blind, sources.blind_dir = True, tmp_path / "blind"
+    assert sources.chain("k") == chain  # read from --blind-dir, not the run folder
+
+    calls = []
+
+    async def fake_attribute(chain, messages, **kwargs):
+        calls.append(kwargs)
+        return {"status": "ok", "selected_message_id": 1, "ranked_candidates": []}
+
+    monkeypatch.setattr(evolve, "attribute_attack_chain_safely", fake_attribute)
+    args = argparse.Namespace(
+        concurrency=1,
+        evidence="chain",
+        context_before=0,
+        context_after=0,
+        attribution_attempts=1,
+        scores=True,
+        exclude_after_attack=False,
+        crash_retries=0,
+        workflow="task-deviation",
+    )
+    asyncio.run(
+        evolve.attribute_runs(sources, ["k"], "Rule one.", "v2", tmp_path / "out", None, args)
+    )
+    assert calls[0]["attacker_objective"] is None
+    assert "Rule one." in calls[0]["system_prompt"]
+    assert "may deviate" in calls[0]["system_prompt"]
+    assert evolve.initial_criteria(args) == TASK_DEVIATION_CRITERIA
+
+    evaluation = evolve.Evaluation("v2", {"k": 1}, {"k": [1]})
+    labels = finalize(label("k", 1, 8, 10))
+    cases_text, _ = evolve.build_cases(evaluation, labels, sources, ["k"], 5)
+    assert "Fix the bug." in cases_text
+    assert "attacker_objective" not in cases_text
+    assert "PAYLOAD" not in cases_text

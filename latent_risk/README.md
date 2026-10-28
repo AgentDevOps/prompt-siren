@@ -41,6 +41,10 @@ Elsewhere: `pip install -e latent_risk` (add `[topics]` for BERTopic-based topic
 uv run --extra topics python latent_risk/scripts/judge_attack_chains.py jobs/<job> --model openai:gpt-5.6-luna --semantic-precision
 uv run python latent_risk/scripts/attribute_attack_chains.py jobs/<job> --model gpt-5.6-luna --top-k 3
 
+# payload-blind workflow: task-deviation extraction + blind attribution (judges see only the
+# user's task and the trajectory, never the payload or attacker objective)
+uv run python latent_risk/scripts/task_deviation_attribution.py jobs/groups --output-dir rq3/task_deviation --model gpt-5.6-luna
+
 # the whole pipeline for one task pair: run, judge, attribute, cut, replay, summary
 latent_risk/experiments/benchmark_pair.sh sympy__sympy-15345:dependency_poisoning_task all
 

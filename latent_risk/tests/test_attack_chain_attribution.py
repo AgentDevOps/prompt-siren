@@ -762,3 +762,37 @@ def test_whole_trajectory_ablation_ignores_the_chain_selection_and_summary(monke
     assert "CHAIN JUDGE SUMMARY" not in prompts[0]
     assert "PAYLOAD TEXT" in prompts[0]
     assert "Finished the benign task." in prompts[0]  # a message outside the chain is evidence
+
+
+def test_payload_blind_attribution_hides_the_objective_and_payload(monkeypatch):
+    chain = payload()
+    chain["attack_context"] = [{"attack_id": "a", "kind": "text", "content": "PAYLOAD TEXT"}]
+    system_prompts = []
+
+    class RecordingAgent:
+        def __init__(self, **kwargs):
+            system_prompts.append(kwargs["system_prompt"])
+
+        async def run(self, prompt):
+            prompts.append(prompt)
+            return SimpleNamespace(output=json.dumps(judge_output(message_index=1)))
+
+    prompts: list[str] = []
+    monkeypatch.setattr(attribution, "Agent", RecordingAgent)
+    result = run(
+        attribution.attribute_attack_chain(
+            chain,
+            messages(),
+            trajectory_id="t1",
+            benign_task=BENIGN_TASK,
+            attacker_objective=None,
+            model="test",
+        )
+    )
+    assert result["status"] == "ok"
+    assert result["prompt_version"] == attribution.TASK_DEVIATION_PROMPT_VERSION
+    assert system_prompts == [attribution.TASK_DEVIATION_SYSTEM_PROMPT]
+    assert prompts[0].startswith("User's task:\n" + BENIGN_TASK)
+    assert "Attacker objective" not in prompts[0]
+    assert "attacker_objective" not in prompts[0]
+    assert "PAYLOAD TEXT" not in prompts[0]

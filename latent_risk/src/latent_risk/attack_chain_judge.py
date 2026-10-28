@@ -201,7 +201,8 @@ class AttackMessageSelectionOutput(BaseModel):
 
 class AttackChainJudgeAnalysis(BaseModel):
     codebook_labeling: dict[str, Any] | None = None
-    method: Literal["attack_chain_judge"] = "attack_chain_judge"
+    # "task_deviation": payload-blind extraction (see latent_risk.task_deviation)
+    method: Literal["attack_chain_judge", "task_deviation"] = "attack_chain_judge"
     schema_version: str = "v2"
     attack_context: list[AttackContextItem] = Field(default_factory=list)
     topic_retrieval: dict[str, Any] | None = None

@@ -2248,6 +2248,31 @@ wheels = [
 ]
 
 [[package]]
+name = "latent-risk"
+version = "0.1.0"
+source = { editable = "latent_risk" }
+dependencies = [
+    { name = "filelock" },
+    { name = "numpy" },
+    { name = "pydantic" },
+    { name = "pydantic-ai-slim" },
+    { name = "pyyaml" },
+    { name = "scipy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bertopic", marker = "extra == 'topics'", specifier = "==0.17.4" },
+    { name = "filelock", specifier = ">=3.19.1" },
+    { name = "numpy" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pydantic-ai-slim", specifier = ">=1.1.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "scipy" },
+]
+provides-extras = ["topics"]
+
+[[package]]
 name = "ldap3"
 version = "2.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3653,6 +3678,7 @@ dependencies = [
     { name = "filelock" },
     { name = "hydra-core" },
     { name = "hydra-submitit-launcher" },
+    { name = "latent-risk" },
     { name = "logfire" },
     { name = "mini-swe-agent" },
     { name = "omegaconf" },
@@ -3729,6 +3755,7 @@ requires-dist = [
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "hydra-submitit-launcher", specifier = ">=1.2.0" },
     { name = "jinja2", marker = "extra == 'swebench'", specifier = ">=3.1.6" },
+    { name = "latent-risk", editable = "latent_risk" },
     { name = "logfire", specifier = ">=4.7.0" },
     { name = "mini-swe-agent", editable = "../mini-swe-agent" },
     { name = "omegaconf", specifier = ">=2.3.0" },
