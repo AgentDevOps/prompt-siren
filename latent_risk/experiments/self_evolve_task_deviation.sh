@@ -24,6 +24,9 @@
 #   SPLIT_FROM [truncated/self_evolve_r11]  VALIDATION_TASKS [2]  VALIDATION_SEED [0]
 #   MIN_REPLAYS [5]  MAX_REPLAYS [10]  ZERO_SAFE_AT [10]  REPLAY_CONCURRENCY [3]
 #   LABEL_CONCURRENCY [1]  VERSIONS (holdout; default v1 and the final incumbent)  ENV_FILE [.env]
+#   ENSEMBLE [none] (or: gate-rejected versions may join an OR ensemble; see
+#   self_evolve_td_ensemble.sh)  VALIDATION_MAX_LOST [0] (see self_evolve_td_valtol.sh)
+#   OPTIMIZER_WORKSPACE [off] WORKSPACE_CALLS [30] (see self_evolve_td_workspace.sh)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -51,6 +54,10 @@ COMMON=(--state "$STATE" --workflow task-deviation --blind-dir "${BLIND_DIR:-rq3
   --explore-seed "${EXPLORE_SEED:-0}" --context-after "${CONTEXT_AFTER:-1}"
   --min-replays "${MIN_REPLAYS:-5}" --max-replays "${MAX_REPLAYS:-10}"
   --zero-safe-at "${ZERO_SAFE_AT:-10}" --replay-concurrency "${REPLAY_CONCURRENCY:-3}")
+[ -n "${ENSEMBLE:-}" ] && COMMON+=(--ensemble "$ENSEMBLE")
+[ -n "${VALIDATION_MAX_LOST:-}" ] && COMMON+=(--validation-max-lost "$VALIDATION_MAX_LOST")
+LOOP=()
+[ -n "${OPTIMIZER_WORKSPACE:-}" ] && LOOP+=(--optimizer-workspace --workspace-calls "${WORKSPACE_CALLS:-30}")
 part=()
 [ -n "${2:-}" ] && part=(--part "$2")
 versions=()
@@ -61,7 +68,7 @@ case "${1:-}" in
   run)
     "${EVOLVE[@]}" run "${COMMON[@]}" --verify-baseline \
       --label-budget "${LABEL_BUDGET:-10}" --label-concurrency "$LABEL_CONCURRENCY" \
-      --max-iterations "${MAX_ITERATIONS:-3}" --patience "${PATIENCE:-3}" 2>&1 | tee -a "$STATE.log"
+      --max-iterations "${MAX_ITERATIONS:-3}" --patience "${PATIENCE:-3}" "${LOOP[@]}" 2>&1 | tee -a "$STATE.log"
     ;;
   status) "${EVOLVE[@]}" status "${COMMON[@]}" ;;
   holdout-cost) "${EVOLVE[@]}" holdout "${COMMON[@]}" "${versions[@]}" ;;
@@ -69,5 +76,5 @@ case "${1:-}" in
     "${EVOLVE[@]}" holdout "${COMMON[@]}" "${versions[@]}" --label \
       --label-concurrency "$LABEL_CONCURRENCY" "${part[@]}"
     ;;
-  *) sed -n '2,25p' "$0"; exit 1 ;;
+  *) sed -n '2,28p' "$0"; exit 1 ;;
 esac

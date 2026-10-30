@@ -150,3 +150,14 @@ def test_missing_user_task_never_calls_the_model(monkeypatch):
     assert calls == []
     assert not analysis.chain_observed
     assert analysis.method == "task_deviation"
+
+
+def test_custom_criteria_replace_only_the_selection_rules(monkeypatch):
+    calls = fake_agent(monkeypatch, [selection_output()])
+    extract(criteria="Select only edits to authentication code.")
+
+    prompt = calls[0]["system_prompt"]
+    assert "Select only edits to authentication code." in prompt
+    assert task_deviation.TASK_DEVIATION_EXTRACTION_CRITERIA not in prompt
+    assert prompt.startswith(task_deviation.TASK_DEVIATION_PREAMBLE)
+    assert prompt.endswith(task_deviation.TASK_DEVIATION_OUTPUT_CONTRACT)
