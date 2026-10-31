@@ -27,7 +27,12 @@ from .dockerfiles import (
     _DOCKERFILE_INSTANCE_PY,
     DOCKERFILE_TEMPLATE,
 )
-from .image_tags import get_base_image_tag, get_benign_image_tag, get_env_image_tag
+from .image_tags import (
+    get_base_image_tag,
+    get_benign_image_tag,
+    get_env_image_tag,
+    get_injection_variant,
+)
 from .swebench_imports import _ACTIVATE_ENV_COMMAND, make_test_spec
 
 
@@ -120,11 +125,14 @@ def prepare_build_context(
     )
 
     # Stage 3: Instance image
-    # Unique per instance - use instance_id for directory
-    benign_tag = get_benign_image_tag(instance_id)
-    instance_context = (
-        cache_dir / "instance" / instance["instance_id"].replace("/", "_").replace(":", "_")
-    )
+    # Unique per instance and injection variant - use both for the directory, so builds of
+    # different variants never share a build context
+    variant = get_injection_variant(config.enable_source_injection, config.enable_skill_injection)
+    benign_tag = get_benign_image_tag(instance_id, variant=variant)
+    instance_dir = instance["instance_id"].replace("/", "_").replace(":", "_")
+    if variant is not None:
+        instance_dir = f"{instance_dir}__{variant}"
+    instance_context = cache_dir / "instance" / instance_dir
     instance_context.mkdir(parents=True, exist_ok=True)
 
     # The instance stage includes the injection placement, so regenerate it for

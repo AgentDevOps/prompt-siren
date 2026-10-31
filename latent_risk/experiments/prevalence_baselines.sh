@@ -16,6 +16,9 @@
 #   STATE [truncated/self_evolve_td] (frozen v1, splits)  SAMPLE_PER_PAIR [6] (first-reply, random)
 #   METHODS [all]  SEED [0]  MIN_REPLAYS [5]  MAX_REPLAYS [10]  ZERO_SAFE_AT [10]
 #   REPLAY_CONCURRENCY [3]  LABEL_CONCURRENCY [1]  ENV_FILE [.env]
+#   REUSE_IMAGES [0]: 1 makes replay jobs use the existing SWE-bench images instead of rebuilding
+#   them. Only safe when the images on disk were built for the same injection condition: the image
+#   tags do not name the condition, so skill-only and standard builds overwrite each other.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ENV_FILE="${ENV_FILE:-.env}"
@@ -26,6 +29,7 @@ ARGS=(--out "${OUT:-truncated/prevalence_baselines}" --state "${STATE:-truncated
   --min-replays "${MIN_REPLAYS:-5}" --max-replays "${MAX_REPLAYS:-10}"
   --zero-safe-at "${ZERO_SAFE_AT:-10}" --replay-concurrency "${REPLAY_CONCURRENCY:-3}"
   --label-concurrency "${LABEL_CONCURRENCY:-1}")
+[ "${REUSE_IMAGES:-0}" = 1 ] && ARGS+=(--reuse-images)
 # shellcheck disable=SC2206  # space-separated list
 [ -n "${METHODS:-}" ] && ARGS+=(--methods $METHODS)
 PY=("${UV[@]}" python latent_risk/experiments/prevalence_baselines.py)

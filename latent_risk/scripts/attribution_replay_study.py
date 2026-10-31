@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -103,19 +104,30 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def discover_jobs(root: Path, ceiling: float) -> tuple[list[Job], list[str]]:
-    """Standard-condition gpt-5.6-luna jobs with a finished asr.json below the ceiling."""
+CONDITIONS = ("standard", "skill_only")
+
+
+def discover_jobs(
+    root: Path, ceiling: float, condition: str = "standard", pool_baseline: bool = False
+) -> tuple[list[Job], list[str]]:
+    """gpt-5.6-luna jobs of one injection condition with a finished asr.json below the ceiling.
+
+    ``standard``: skill + source injection, jobs outside ``skill_only/`` folders; ``skill_only``:
+    skill injection only, jobs inside them. With ``pool_baseline`` the jobs of a task pair share
+    one fresh-run baseline (their pooled successes / valid runs), and the ceiling applies to it.
+    """
     jobs: list[Job] = []
     skipped: list[str] = []
     for config_path in sorted(root.glob(f"**/{JOB_PREFIX}*/config.yaml")):
         job_dir = config_path.parent
         label = str(job_dir.relative_to(root))
-        if "skill_only" in job_dir.parts:
+        if ("skill_only" in job_dir.parts) != (condition == "skill_only"):
             continue
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         dataset = config.get("dataset", {}).get("config", {})
-        if not (dataset.get("enable_source_injection") and dataset.get("enable_skill_injection")):
-            skipped.append(f"{label}: not the standard injection condition")
+        source = bool(dataset.get("enable_source_injection"))
+        if not dataset.get("enable_skill_injection") or source != (condition == "standard"):
+            skipped.append(f"{label}: not the {condition} injection condition")
             continue
         task_ids = config.get("task_ids") or []
         if len(task_ids) != 1:
@@ -126,12 +138,22 @@ def discover_jobs(root: Path, ceiling: float) -> tuple[list[Job], list[str]]:
             skipped.append(f"{label}: no asr.json yet (job still running?)")
             continue
         asr = load_json(asr_path)
-        job = Job(job_dir, task_ids[0], asr["attack_successes"], asr["valid_attack_runs"])
+        jobs.append(Job(job_dir, task_ids[0], asr["attack_successes"], asr["valid_attack_runs"]))
+    if pool_baseline:
+        pooled: dict[str, tuple[int, int]] = {}
+        for job in jobs:
+            k, n = pooled.get(job.task_id, (0, 0))
+            pooled[job.task_id] = (k + job.base_k, n + job.base_n)
+        for job in jobs:
+            job.base_k, job.base_n = pooled[job.task_id]
+    kept: list[Job] = []
+    for job in jobs:
         if job.base_n == 0 or job.asr >= ceiling:
+            label = str(job.path.relative_to(root))
             skipped.append(f"{label}: fresh-run ASR {job.base_k}/{job.base_n} at the ceiling")
             continue
-        jobs.append(job)
-    return jobs, skipped
+        kept.append(job)
+    return kept, skipped
 
 
 def run_command(command: list[str], *, dry_run: bool) -> int:
@@ -294,6 +316,25 @@ def being_replayed(cut_dir: Path) -> bool:
     return False
 
 
+USE_CACHE_FALSE = re.compile(r'^(\s*"?use_cache"?:\s*)false\b', re.MULTILINE)
+
+
+def reuse_images(cut_dir: Path) -> None:
+    """Make a cut job use the existing SWE-bench images (dataset.config.use_cache=true).
+
+    The cut copies its source job's config. Source jobs built with use_cache=false make every
+    replay job force-delete and rebuild the shared images when it starts, which breaks container
+    creation in any other job running at that moment. The images are built from the same spec,
+    so reusing them does not change the replay. `jobs resume` cannot override dataset settings,
+    hence the edit of the cut's own config.yaml (never a job under jobs/).
+    """
+    config = cut_dir / "config.yaml"
+    text = config.read_text(encoding="utf-8")
+    patched = USE_CACHE_FALSE.sub(r"\1true", text)
+    if patched != text:
+        config.write_text(patched, encoding="utf-8")
+
+
 def stage_replay(cut: Cut, args: argparse.Namespace) -> None:
     if not cut.cut_dir.exists():
         return
@@ -310,6 +351,8 @@ def stage_replay(cut: Cut, args: argparse.Namespace) -> None:
         if not args.dry_run:
             parked.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(run_dir), str(parked))
+    if getattr(args, "reuse_images", False) and not args.dry_run:
+        reuse_images(cut.cut_dir)
     command = replay_command(
         sys.executable, cut.cut_dir, args.replays - completed, args.replay_concurrency
     )
@@ -505,6 +548,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--replays", type=int, default=30)
     parser.add_argument(
+        "--reuse-images",
+        action="store_true",
+        help="replay jobs use the existing SWE-bench images instead of rebuilding them",
+    )
+    parser.add_argument(
+        "--condition",
+        choices=CONDITIONS,
+        default="standard",
+        help="injection condition of the jobs (skill_only: jobs in skill_only/ folders)",
+    )
+    parser.add_argument(
+        "--pool-baseline",
+        action="store_true",
+        help="the jobs of a task pair share one fresh-run baseline (pooled successes / runs)",
+    )
+    parser.add_argument(
         "--replay-concurrency",
         type=int,
         default=1,
@@ -545,7 +604,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     stages = STAGES if "all" in args.stages else tuple(s for s in STAGES if s in args.stages)
-    jobs, skipped = discover_jobs(args.jobs_root, args.ceiling)
+    jobs, skipped = discover_jobs(args.jobs_root, args.ceiling, args.condition, args.pool_baseline)
     all_jobs = list(jobs)
     if args.job_filter:
         jobs = [job for job in jobs if args.job_filter in str(job.path)]

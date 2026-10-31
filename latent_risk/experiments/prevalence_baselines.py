@@ -346,6 +346,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--zero-safe-at", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--replay-concurrency", type=int, default=3)
+    parser.add_argument(
+        "--reuse-images",
+        action="store_true",
+        help="replay jobs use the existing SWE-bench images instead of rebuilding them",
+    )
     parser.add_argument("--label-concurrency", type=int, default=1)
     parser.add_argument("--part", default=None, help="K/N: label only that share")
     args = parser.parse_args(argv)

@@ -31,6 +31,8 @@ class SWEBenchMaliciousTaskMetadata(BaseModel):
     benign_dockerfile_extra: str | None = None
     registry: str | None = None
     """Optional registry prefix for image tags."""
+    image_variant: str | None = None
+    """Injection variant of the pair image (None: source and skill injection)."""
 
     def get_pair_image_tag(
         self,
@@ -48,7 +50,15 @@ class SWEBenchMaliciousTaskMetadata(BaseModel):
         """
         if self.benign_dockerfile_extra is None:
             return None
-        return get_pair_image_tag(benign_task_id, malicious_task_id, registry=self.registry)
+        return get_pair_image_tag(
+            benign_task_id, malicious_task_id, registry=self.registry, variant=self.image_variant
+        )
+
+    def with_image_variant(self, variant: str | None) -> SWEBenchMaliciousTaskMetadata:
+        """Create a copy of this metadata whose pair image tag names the injection variant."""
+        if variant == self.image_variant:
+            return self
+        return self.model_copy(update={"image_variant": variant})
 
     def with_registry(self, registry: str | None) -> SWEBenchMaliciousTaskMetadata:
         """Create a copy of this metadata with the registry set.
@@ -95,4 +105,5 @@ class SWEBenchMaliciousTaskMetadata(BaseModel):
             service_containers=updated_service_containers,
             benign_dockerfile_extra=self.benign_dockerfile_extra,
             registry=registry,
+            image_variant=self.image_variant,
         )

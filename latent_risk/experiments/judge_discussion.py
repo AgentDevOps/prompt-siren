@@ -95,6 +95,8 @@ def loop_args(args: argparse.Namespace) -> argparse.Namespace:
     ]
     if settings.get("exclude_after_attack"):
         argv.append("--exclude-after-attack")
+    if getattr(args, "reuse_images", False):
+        argv.append("--reuse-images")
     return se.parse_args(argv)
 
 

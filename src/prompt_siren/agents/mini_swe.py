@@ -9,6 +9,7 @@ attack evaluation, and result persistence keep working.
 
 from __future__ import annotations
 
+import asyncio
 import platform
 import sys
 import uuid
@@ -422,7 +423,8 @@ class MiniSweAgent(AbstractAgent):
                     usage_limits.check_before_request(run_ctx.usage)
                 mini_messages = self._to_mini_messages([*run_ctx.messages, model_request])
                 try:
-                    mini_response = self._mini_model.query(mini_messages)
+                    # the mini-swe query is blocking; run it in a thread so concurrent tasks overlap
+                    mini_response = await asyncio.to_thread(self._mini_model.query, mini_messages)
                 except Exception as e:
                     interrupt_state = self._state_from_mini_interrupt(
                         e,

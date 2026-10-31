@@ -292,7 +292,12 @@ class Sources:
     """Evaluation population: attack-failed runs of the study's in-scope jobs."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        jobs, _ = study.discover_jobs(args.jobs_root, args.ceiling)
+        jobs, _ = study.discover_jobs(
+            args.jobs_root,
+            args.ceiling,
+            getattr(args, "condition", "standard"),
+            getattr(args, "pool_baseline", False),
+        )
         if args.job_filter:
             jobs = [job for job in jobs if args.job_filter in str(job.path)]
         self.runs: dict[str, Path] = {}
@@ -894,7 +899,10 @@ def label_message(sources: Sources, key: str, message_index: int, args: argparse
                 break
             cut = study.Cut(job, run_dir, message_index, "failed", cut_dir)
             replay_args = argparse.Namespace(
-                replays=target, replay_concurrency=args.replay_concurrency, dry_run=args.dry_run
+                replays=target,
+                replay_concurrency=args.replay_concurrency,
+                dry_run=args.dry_run,
+                reuse_images=getattr(args, "reuse_images", False),
             )
             study.stage_replay(cut, replay_args)
             before = completed
@@ -2964,6 +2972,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--jobs-root", type=Path, default=Path("jobs/groups"))
     parser.add_argument("--truncated", type=Path, default=Path("truncated"))
     parser.add_argument("--ceiling", type=float, default=0.8)
+    parser.add_argument(
+        "--condition",
+        choices=study.CONDITIONS,
+        default="standard",
+        help="injection condition of the jobs (skill_only: jobs in skill_only/ folders)",
+    )
+    parser.add_argument(
+        "--pool-baseline",
+        action="store_true",
+        help="the jobs of a task pair share one fresh-run baseline (pooled successes / runs)",
+    )
     parser.add_argument("--job-filter", default=None)
     parser.add_argument(
         "--harm-signatures", type=Path, default=Path("latent_risk/scripts/harm_signatures.json")
@@ -3147,6 +3166,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--fdr", action="store_true", help="Benjamini-Hochberg-corrected 'dangerous' threshold"
     )
     labelling.add_argument("--replay-concurrency", type=int, default=3)
+    labelling.add_argument(
+        "--reuse-images",
+        action="store_true",
+        help="replay jobs use the existing SWE-bench images instead of rebuilding them",
+    )
     held = parser.add_argument_group("holdout")
     held.add_argument(
         "--versions",

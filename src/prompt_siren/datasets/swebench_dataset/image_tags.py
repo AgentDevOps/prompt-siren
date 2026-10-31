@@ -8,6 +8,9 @@ The image tags follow a consistent naming convention:
 - Benign tasks: siren-swebench-benign:{normalized_instance_id}
 - Service containers: siren-swebench-service:{normalized_task_id}
 - Benign x malicious pairs: siren-swebench-pair:{normalized_benign_id}__{normalized_malicious_id}
+- Benign and pair images built with an injection point disabled carry the variant as a suffix
+  (e.g. siren-swebench-benign:{normalized_instance_id}__skill_only), because the injection is
+  written into the image at build time
 - Agent images: siren-swebench-agent:basic
 - Base/env cache images: siren-swebench-base:{hash}, siren-swebench-env:{hash}
 """
@@ -30,17 +33,42 @@ def normalize_tag(name: str) -> str:
     return normalize_tag_component(name)
 
 
-def get_benign_image_tag(instance_id: str, registry: str | None = None) -> str:
+def get_injection_variant(
+    enable_source_injection: bool, enable_skill_injection: bool
+) -> str | None:
+    """Name of the injection variant baked into benign and pair images.
+
+    Returns None for the default (source and skill injection), so default tags are unchanged.
+    """
+    if enable_source_injection and enable_skill_injection:
+        return None
+    if enable_skill_injection:
+        return "skill_only"
+    if enable_source_injection:
+        return "source_only"
+    return "no_injection"
+
+
+def _with_variant(name: str, variant: str | None) -> str:
+    return name if variant is None else f"{name}__{variant}"
+
+
+def get_benign_image_tag(
+    instance_id: str, registry: str | None = None, variant: str | None = None
+) -> str:
     """Get the Docker image tag for a benign task.
 
     Args:
         instance_id: The SWEBench instance ID (e.g., "django__django-11179")
         registry: Optional registry prefix to prepend
+        variant: Injection variant of the image (see get_injection_variant)
 
     Returns:
         Docker image tag (e.g., "siren-swebench-benign:django__django-11179")
     """
-    return make_dataset_tag(SWEBENCH_IMAGE_PREFIX, "benign", instance_id, registry)
+    return make_dataset_tag(
+        SWEBENCH_IMAGE_PREFIX, "benign", _with_variant(instance_id, variant), registry
+    )
 
 
 def get_service_image_tag(task_id: str, registry: str | None = None) -> str:
@@ -61,18 +89,24 @@ def get_malicious_image_tag(task_id: str, registry: str | None = None) -> str:
     return get_service_image_tag(task_id, registry)
 
 
-def get_pair_image_tag(benign_id: str, malicious_id: str, registry: str | None = None) -> str:
+def get_pair_image_tag(
+    benign_id: str,
+    malicious_id: str,
+    registry: str | None = None,
+    variant: str | None = None,
+) -> str:
     """Get the Docker image tag for a benign x malicious pair.
 
     Args:
         benign_id: The benign task instance ID
         malicious_id: The malicious task ID
         registry: Optional registry prefix to prepend
+        variant: Injection variant of the benign image it derives from (see get_injection_variant)
 
     Returns:
         Docker image tag (e.g., "siren-swebench-pair:django__django-11179__env_direct_exfil_task")
     """
-    pair_id = f"{benign_id}__{malicious_id}"
+    pair_id = _with_variant(f"{benign_id}__{malicious_id}", variant)
     return make_dataset_tag(SWEBENCH_IMAGE_PREFIX, "pair", pair_id, registry)
 
 

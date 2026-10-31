@@ -39,7 +39,7 @@ from .constants import (
 )
 from .docker_builder import prepare_build_context
 from .evaluators import create_test_evaluator
-from .image_tags import get_benign_image_tag, get_pair_image_tag
+from .image_tags import get_benign_image_tag, get_injection_variant, get_pair_image_tag
 from .malicious_tasks import MALICIOUS_TASKS
 from .malicious_tasks.build_registry import get_all_service_container_build_specs
 from .prompts.loader import format_task_prompt_from_template, load_prompt_template
@@ -121,13 +121,16 @@ class SwebenchDataset(AbstractDataset[BashEnvState, str, str, StrContentAttack])
             )
 
         specs: list[ImageBuildSpec] = []
+        variant = get_injection_variant(
+            config.enable_source_injection, config.enable_skill_injection
+        )
 
         # 1. Add multi-stage build specs for benign task images
         #    prepare_build_context uses standardized tags for base/env/benign images.
         #    Keep a guard to ensure the final stage matches the benign naming scheme.
         for instance in instances:
             multi_stage_spec, _ = prepare_build_context(instance, config, build_context_dir)
-            benign_tag = get_benign_image_tag(instance["instance_id"])
+            benign_tag = get_benign_image_tag(instance["instance_id"], variant=variant)
             if multi_stage_spec.final_tag != benign_tag:
                 updated_stages = list(multi_stage_spec.stages)
                 updated_stages[-1] = updated_stages[-1].model_copy(update={"tag": benign_tag})
@@ -140,14 +143,14 @@ class SwebenchDataset(AbstractDataset[BashEnvState, str, str, StrContentAttack])
         # 3. Add derived specs for pairs where malicious task has benign_dockerfile_extra
         for instance in instances:
             benign_id = instance["instance_id"]
-            benign_tag = get_benign_image_tag(benign_id)
+            benign_tag = get_benign_image_tag(benign_id, variant=variant)
 
             for task in MALICIOUS_TASKS:
                 if (
                     isinstance(task.metadata, SWEBenchMaliciousTaskMetadata)
                     and task.metadata.benign_dockerfile_extra
                 ):
-                    pair_tag = get_pair_image_tag(benign_id, task.id)
+                    pair_tag = get_pair_image_tag(benign_id, task.id, variant=variant)
                     specs.append(
                         DerivedImageSpec(
                             base_image_tag=benign_tag,
@@ -249,7 +252,13 @@ def _prepare_benign_task_from_instance(
     test_spec = make_test_spec(instance, injection_spec=injection_spec)
 
     # Use PullImageSpec to reference pre-built image with optional registry prefix
-    image_tag = get_benign_image_tag(instance_id, registry=config.registry)
+    image_tag = get_benign_image_tag(
+        instance_id,
+        registry=config.registry,
+        variant=get_injection_variant(
+            config.enable_source_injection, config.enable_skill_injection
+        ),
+    )
     image_spec = PullImageSpec(tag=image_tag)
 
     # Format task prompt
@@ -330,7 +339,11 @@ def create_swebench_dataset(
             prompt=task.prompt,
             evaluators=task.evaluators,
             metadata=(
-                task.metadata.with_registry(config.registry)
+                task.metadata.with_registry(config.registry).with_image_variant(
+                    get_injection_variant(
+                        config.enable_source_injection, config.enable_skill_injection
+                    )
+                )
                 if isinstance(task.metadata, SWEBenchMaliciousTaskMetadata)
                 else task.metadata
             ),
