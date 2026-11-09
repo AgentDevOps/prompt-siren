@@ -80,4 +80,24 @@ venv/
 /docs/
 /tests/
 /hpc.md
+# Research notes, generated data and reports stay local
 rq3/
+/benchmark_failures.txt
+/swebench_lite.jsonl
+*.orig
+*.rej
+# latent_risk/docs: only the rubric the labeling code reads; the rest are notes, and
+# attack_success_cases.md is written by the runner at run time
+latent_risk/docs/*
+!latent_risk/docs/labeling/
+latent_risk/docs/labeling/*
+!latent_risk/docs/labeling/old_path_6level_rubric.md
+external_data/
+
+# Credentials that must never be uploaded (the benchmark's fake keys are tracked files, unaffected)
+*credentials*.json
+.netrc
+id_rsa*
+id_ed25519*
+*.p12
+*.pfx

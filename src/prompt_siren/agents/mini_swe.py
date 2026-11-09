@@ -10,6 +10,7 @@ attack evaluation, and result persistence keep working.
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import sys
 import uuid
@@ -49,6 +50,7 @@ from ..types import (
     InjectionAttack,
 )
 from .abstract import AbstractAgent
+from .skills import append_skill_message
 from .states import (
     EndState,
     ExecutionEndedError,
@@ -59,7 +61,6 @@ from .states import (
     ModelResponseState,
     NoPreviousStateError,
 )
-from .skills import append_skill_message
 from .utils import (
     get_model_request_parts_if_no_injectable,
     handle_tool_calls,
@@ -76,10 +77,14 @@ class MiniSweAgentConfig(BaseModel):
     """Configuration for the mini-swe-agent adapter."""
 
     mini_swe_agent_path: Path | None = Field(
-        default=Path("/home/xiaoliang_zhang/mini-swe-agent/src"),
+        default_factory=lambda: Path(
+            os.environ.get("MINI_SWE_AGENT_DIR", str(Path.home() / "mini-swe-agent"))
+        )
+        / "src",
         description=(
-            "Path containing the minisweagent package. Set to null if mini-swe-agent "
-            "is installed in the active Python environment."
+            "Path containing the minisweagent package (default: $MINI_SWE_AGENT_DIR/src, or "
+            "~/mini-swe-agent/src). Set to null if mini-swe-agent is installed in the active "
+            "Python environment."
         ),
     )
     config_specs: list[str] = Field(

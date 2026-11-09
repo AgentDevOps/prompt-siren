@@ -22,6 +22,12 @@ Commands:
   label     replay-label every selected message that has no verdict yet (--part K/N splits it;
             --methods limits it)
   report    write --out/report.md (prevalence per task pair; methods per split)
+
+Dataset v2 (--manifest, rq3/framework_report.md 7.2): the population is the manifest's sampled
+attack-failed runs of --agent-model and --condition, each task pair with its cell's pooled
+baseline. v1's scores come from the held-out attribution of --state (dataset_v1_eval.sh attribute,
+<state>_holdout), and the methods are compared on the current 8 task pairs (selected for holding a
+dangerous message) and the new ones (screened without replays) instead of v1's splits.
 """
 
 from __future__ import annotations
@@ -42,8 +48,10 @@ EXPERIMENTS = Path(__file__).resolve().parent
 if str(EXPERIMENTS) not in sys.path:
     sys.path.insert(0, str(EXPERIMENTS))
 
+from build_condition_images import TASK_PAIRS  # noqa: E402
 from claim2_audit import first_chain_message  # noqa: E402
 from judge_discussion import loop_args, SPLITS  # noqa: E402
+from scripts.attribution_replay_study import CONDITIONS, MODEL_PREFIXES  # noqa: E402
 
 from scripts import self_evolve_attribution as se  # noqa: E402
 
@@ -54,6 +62,9 @@ V1_DIRS = {
     "validation": "{state}/validation/v1",
     "test": "{state}_vt_holdout/attributions/v1",
 }
+# dataset v2: every run is held out, attributed by dataset_v1_eval.sh attribute
+V2_DIR = "{state}_holdout/attributions/v1"
+V2_GROUPS = ("current pairs", "new pairs")
 
 Item = tuple[str, int]
 
@@ -69,17 +80,30 @@ class Study:
         self.runs = sorted(key for key in self.sources.runs if self.sources.chain(key))
         self.threshold = se.frozen_threshold(args.state, "v1")
         self.scores: dict[Item, int] = {}
+        if args.manifest:
+            path = Path(V2_DIR.format(state=args.state))
+            self.scores.update(se.load_evaluation(self.sources, self.runs, "v1", path).scores)
+            return
         for split, pattern in V1_DIRS.items():
             runs = [key for key in self.runs if self.split(key) == split]
             path = Path(pattern.format(state=args.state))
             self.scores.update(se.load_evaluation(self.sources, runs, "v1", path).scores)
 
     def split(self, key: str) -> str:
+        if self.args.manifest:
+            current = self.sources.job_of[key].task_id in TASK_PAIRS
+            return V2_GROUPS[0] if current else V2_GROUPS[1]
         if se.is_held_out(self.sources, key, self.local):
             return "test"
         if se.in_validation(self.sources, key, self.local):
             return "validation"
         return "training"
+
+    def columns(self) -> list[tuple[str, tuple[str, ...]]]:
+        """E2.1 report columns: (name, the splits it pools)."""
+        if self.args.manifest:
+            return [(group, (group,)) for group in V2_GROUPS] + [("all", V2_GROUPS)]
+        return [(s, (s,)) for s in SPLITS] + [("validation + test", ("validation", "test"))]
 
     def pair(self, key: str) -> str:
         return self.sources.job_of[key].task_dir
@@ -266,6 +290,18 @@ def report(study: Study) -> None:
             f"| {pair.removesuffix('_task')} | {job.base_k}/{job.base_n} | {row[0]} | {row[1]} | "
             f"{row[2]}/{row[3]} | {wilson(row[2], row[3])} | {row[4]} | {row[5]} |"
         )
+    if study.args.manifest:  # selected (current) vs screened (new) task pairs
+        for group in V2_GROUPS:
+            keys = [k for k in study.runs if study.split(k) == group]
+            items = [(k, first[k]) for k in keys if k in first]
+            decided = [
+                verdict[i] == "dangerous" for i in items if verdict.get(i) in ("dangerous", "safe")
+            ]
+            lines.append(
+                f"| *{group}* | | {len(keys)} | {len(items)} | {sum(decided)}/{len(decided)} | "
+                f"{wilson(sum(decided), len(decided))} | {len(items) - len(decided)} | "
+                f"{len({k for k, _ in known if k in set(keys)})} |"
+            )
     lines.append(
         f"| **All** | | {totals[0]} | {totals[1]} | {totals[2]}/{totals[3]} | "
         f"{wilson(totals[2], totals[3])} | {totals[4]} | {totals[5]} |"
@@ -279,21 +315,32 @@ def report(study: Study) -> None:
         ]
 
     # E2.1: methods
+    columns = study.columns()
+    if study.args.manifest:
+        frozen = (
+            f"v1's threshold ({study.threshold}) was frozen on the training split of the "
+            "self-evolving run (gpt-5.6-luna, standard, current pairs): every run here is held "
+            "out, except that gpt standard runs of the current pairs may share v1's training jobs."
+        )
+    else:
+        frozen = (
+            f"v1's threshold ({study.threshold}) was frozen on training; validation and test are "
+            "the clean comparison."
+        )
     lines += [
         "",
         "## E2.1 The frozen v1 workflow vs baselines",
         "",
-        f"v1's threshold ({study.threshold}) was frozen on training; validation and test are "
-        "the clean comparison. Cells: dangerous caught / known dangerous; flags (trajectories); "
+        f"{frozen} Cells: dangerous caught / known dangerous; flags (trajectories); "
         "precision on decided flags (+ undecided); replays spent per dangerous message found.",
         "",
-        "| Method | " + " | ".join(SPLITS) + " | validation + test |",
-        "| --- | " + " | ".join("---" for _ in SPLITS) + " | --- |",
+        "| Method | " + " | ".join(name for name, _ in columns) + " |",
+        "| --- |" + " --- |" * len(columns),
     ]
     for method in METHODS:
         items = study.select(method)
         cells = []
-        for splits in [(s,) for s in SPLITS] + [("validation", "test")]:
+        for _, splits in columns:
             mine = [i for i in items if study.split(i[0]) in splits]
             known_here = [i for i in known if study.split(i[0]) in splits]
             tp = [i for i in mine if verdict.get(i) == "dangerous"]
@@ -353,6 +400,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--label-concurrency", type=int, default=1)
     parser.add_argument("--part", default=None, help="K/N: label only that share")
+    parser.add_argument(
+        "--manifest", type=Path, default=None, help="dataset v2 manifest (sample_dataset.py)"
+    )
+    parser.add_argument("--condition", choices=CONDITIONS, default="standard")
+    parser.add_argument("--agent-model", choices=tuple(MODEL_PREFIXES), default="gpt")
     args = parser.parse_args(argv)
     if args.part is not None:
         part, parts = (int(value) for value in args.part.split("/"))

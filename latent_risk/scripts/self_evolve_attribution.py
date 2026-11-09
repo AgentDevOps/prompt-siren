@@ -110,7 +110,10 @@ from scripts import attribution_replay_study as study  # noqa: E402
 
 INJECTED_BLOCK = re.compile(r"<INFORMATION>[\s\S]*?</INFORMATION>")
 INJECTION_MARKER = re.compile(r"</?\s*INFORMATION\s*>", re.IGNORECASE)
-EXCLUDED_DIRS = ("excluded_attack_succeeded_sources",)
+# inserted_context: checkpoints with an inserted message (recovery_context.py); their replays
+# measure the insertion, not the original message they end on.
+# lookahead: short continuations (lookahead.py), never replay labels
+EXCLUDED_DIRS = ("excluded_attack_succeeded_sources", "inserted_context", "lookahead")
 # Held-out evaluation (``holdout``) writes to "<state>_holdout"; without a task split those
 # replays never feed the loop's training labels.
 HOLDOUT_SUFFIX = "_holdout"
@@ -292,12 +295,19 @@ class Sources:
     """Evaluation population: attack-failed runs of the study's in-scope jobs."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        jobs, _ = study.discover_jobs(
-            args.jobs_root,
-            args.ceiling,
-            getattr(args, "condition", "standard"),
-            getattr(args, "pool_baseline", False),
-        )
+        condition = getattr(args, "condition", "standard")
+        model = getattr(args, "agent_model", "gpt")
+        sampled: set[Path] | None = None
+        if getattr(args, "manifest", None):
+            jobs, sampled = study.manifest_jobs(args.manifest, condition, model)
+        else:
+            jobs, _ = study.discover_jobs(
+                args.jobs_root,
+                args.ceiling,
+                condition,
+                getattr(args, "pool_baseline", False),
+                model,
+            )
         if args.job_filter:
             jobs = [job for job in jobs if args.job_filter in str(job.path)]
         self.runs: dict[str, Path] = {}
@@ -305,6 +315,8 @@ class Sources:
         self.by_run_id: dict[str, list[str]] = defaultdict(list)
         for job in jobs:
             for run_dir in job.runs():
+                if sampled is not None and run_dir.resolve() not in sampled:
+                    continue  # outside the manifest's sample
                 result = run_dir / "result.json"
                 if not result.exists() or load_json(result).get("attack_score"):
                     continue  # failed runs only
@@ -2982,6 +2994,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--pool-baseline",
         action="store_true",
         help="the jobs of a task pair share one fresh-run baseline (pooled successes / runs)",
+    )
+    parser.add_argument(
+        "--agent-model",
+        choices=tuple(study.MODEL_PREFIXES),
+        default="gpt",
+        help="agent model of the jobs (the model that ran them, not the judge or optimiser)",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="dataset manifest (sample_dataset.py): only its sampled runs of --agent-model and "
+        "--condition, with each cell's pooled baseline; its paths must lie under --jobs-root",
     )
     parser.add_argument("--job-filter", default=None)
     parser.add_argument(

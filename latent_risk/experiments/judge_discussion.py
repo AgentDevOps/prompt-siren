@@ -97,6 +97,10 @@ def loop_args(args: argparse.Namespace) -> argparse.Namespace:
         argv.append("--exclude-after-attack")
     if getattr(args, "reuse_images", False):
         argv.append("--reuse-images")
+    # dataset v2: the manifest's sampled runs (its paths lie under jobs/)
+    if getattr(args, "manifest", None):
+        argv += ["--manifest", str(args.manifest), "--jobs-root", "jobs"]
+        argv += ["--condition", args.condition, "--agent-model", args.agent_model]
     return se.parse_args(argv)
 
 

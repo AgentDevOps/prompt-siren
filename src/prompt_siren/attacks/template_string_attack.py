@@ -53,6 +53,14 @@ def _get_model_name(model_name: str | KnownModelName) -> str:
         return "Qwen"
     if "llama" in model_name:
         return "Llama"
+    if "deepseek" in model_name:
+        return "DeepSeek"
+    # Meta's Muse models (e.g. openrouter/meta/muse-spark-1.3-contributor)
+    if "muse" in model_name:
+        return "Muse"
+    # Zhipu's GLM models (e.g. openrouter/z-ai/glm-5.3-flash)
+    if "glm" in model_name:
+        return "GLM"
     raise UnknownModelError(f"Unknown model error: '{model_name}'")
 
 

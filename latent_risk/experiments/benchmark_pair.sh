@@ -91,7 +91,7 @@ stage_run() {
   "${UV[@]}" prompt-siren jobs start attack \
     +dataset=swebench +attack=agentdojo_important_instructions +sandbox_manager=local-docker \
     agent.type=mini_swe \
-    '+agent.config.config_specs=["/home/xiaoliang_zhang/mini-swe-agent/src/minisweagent/config/gpt5.yaml","agent.mode=yolo","agent.confirm_exit=false"]' \
+    "+agent.config.config_specs=[\"${MINI_SWE_AGENT_DIR:-$HOME/mini-swe-agent}/src/minisweagent/config/gpt5.yaml\",\"agent.mode=yolo\",\"agent.confirm_exit=false\"]" \
     dataset.config.registry=null dataset.config.enable_network=false dataset.config.bash_timeout=180 \
     sandbox_manager.config.network_enabled=false \
     "task_ids=[\"$TASK\"]" output.n_runs_per_task="$RUNS" \

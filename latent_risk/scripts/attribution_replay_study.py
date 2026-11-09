@@ -47,6 +47,14 @@ from latent_risk.prefix_attribution import (
 from scipy.stats import fisher_exact
 
 JOB_PREFIX = "swebench_mini_swe_openai_gpt-5_6-luna_template_string_"
+# job-name prefix of each agent model's attack jobs (job names sanitise the mini-swe model name)
+MODEL_PREFIXES = {
+    "gpt": JOB_PREFIX,
+    "qwen": "swebench_mini_swe_hosted_vllm_qwen3_6-35b_template_string_",
+    "deepseek": "swebench_mini_swe_openrouter_deepseek_deepseek-v4_1-flash-1017_template_string_",
+    "muse": "swebench_mini_swe_openrouter_meta_muse-spark-1_3-contributor_template_string_",
+    "glm": "swebench_mini_swe_openrouter_z-ai_glm-5_3-flash_template_string_",
+}
 ATTRIBUTION = "attack_chain_attribution.json"
 CHAIN = "attack_chain_judge.json"
 CUT_SUFFIX = "__truncated_attribution_rank_1_after"
@@ -108,9 +116,14 @@ CONDITIONS = ("standard", "skill_only")
 
 
 def discover_jobs(
-    root: Path, ceiling: float, condition: str = "standard", pool_baseline: bool = False
+    root: Path,
+    ceiling: float,
+    condition: str = "standard",
+    pool_baseline: bool = False,
+    model: str = "gpt",
 ) -> tuple[list[Job], list[str]]:
-    """gpt-5.6-luna jobs of one injection condition with a finished asr.json below the ceiling.
+    """Jobs of one agent model (gpt-5.6-luna by default) and injection condition with a finished
+    asr.json below the ceiling.
 
     ``standard``: skill + source injection, jobs outside ``skill_only/`` folders; ``skill_only``:
     skill injection only, jobs inside them. With ``pool_baseline`` the jobs of a task pair share
@@ -118,7 +131,7 @@ def discover_jobs(
     """
     jobs: list[Job] = []
     skipped: list[str] = []
-    for config_path in sorted(root.glob(f"**/{JOB_PREFIX}*/config.yaml")):
+    for config_path in sorted(root.glob(f"**/{MODEL_PREFIXES[model]}*/config.yaml")):
         job_dir = config_path.parent
         label = str(job_dir.relative_to(root))
         if ("skill_only" in job_dir.parts) != (condition == "skill_only"):
@@ -154,6 +167,22 @@ def discover_jobs(
             continue
         kept.append(job)
     return kept, skipped
+
+
+def manifest_jobs(manifest: Path, condition: str, model: str) -> tuple[list[Job], set[Path]]:
+    """The jobs of one model and condition in a dataset manifest (latent_risk/experiments/
+    sample_dataset.py) and the runs sampled from them. Every job carries its cell's pooled
+    fresh-run baseline, computed over all of the cell's runs, not only the sampled ones."""
+    jobs: list[Job] = []
+    sampled: set[Path] = set()
+    for cell in load_json(manifest)["cells"]:
+        if cell["condition"] != condition or cell["model"] != model:
+            continue
+        jobs.extend(
+            Job(Path(job), cell["task_id"], cell["base_k"], cell["base_n"]) for job in cell["jobs"]
+        )
+        sampled.update(Path(run["path"]).resolve() for run in cell["runs"])
+    return jobs, sampled
 
 
 def run_command(command: list[str], *, dry_run: bool) -> int:

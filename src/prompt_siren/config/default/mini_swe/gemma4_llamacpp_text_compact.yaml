@@ -54,7 +54,9 @@ environment:
     TQDM_DISABLE: '1'
 model:
   model_class: vllm
-  model_name: hosted_vllm//mnt/data/xiaoliang/models/gemma4-31b-gguf/gemma-4-31B_q4_0-it.gguf
+  # The model id the llama.cpp server reports: the -m path unless started with --alias.
+  # Override per run: agent.config.config_specs=[...,"model.model_name=hosted_vllm/<id>"]
+  model_name: hosted_vllm/gemma-4-31B_q4_0-it.gguf
   observation_template: |
     {% if output.exception_info -%}
     <exception>{{output.exception_info}}</exception>

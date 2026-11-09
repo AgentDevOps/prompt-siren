@@ -1,0 +1,13 @@
+# mini-swe overlay for MODEL=deepseek in prepare_datasets.sh, merged over the gpt settings (gpt5.yaml):
+# only the model changes. OpenRouter otherwise routes each call to any of ~40 hosts, many serving
+# fp4/fp8-quantised weights, so the calls of one run, and replays vs. fresh runs, could hit different
+# hosts. Every call goes to DeepSeek's own endpoint, without fallback (an outage fails the call).
+model:
+  model_name: openrouter/deepseek/deepseek-v4.1-flash-1017
+  # litellm has no price for this model; cost tracking would stop the run
+  cost_tracking: ignore_errors
+  model_kwargs:
+    extra_body:
+      provider:
+        order: [deepseek]
+        allow_fallbacks: false

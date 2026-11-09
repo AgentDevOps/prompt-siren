@@ -56,3 +56,25 @@ def test_reuse_images_sets_use_cache_in_either_config_format(tmp_path):
         study.reuse_images(tmp_path)
         patched = (tmp_path / "config.yaml").read_text(encoding="utf-8")
         assert patched == f"dataset:\n  config:\n{text.replace('false', 'true')}"
+
+
+def test_manifest_jobs_take_the_cell_baseline_and_its_sampled_runs(tmp_path):
+    job = make_job(tmp_path, f"{PAIR}/skill_only", "b", False, 1, 10)
+    run = job / PAIR / "r1"
+    cell = {
+        "model": "gpt",
+        "condition": "skill_only",
+        "task_id": TASK,
+        "jobs": [str(job)],
+        "base_k": 7,
+        "base_n": 30,
+        "runs": [{"path": str(run), "attack_success": False}],
+    }
+    other = {**cell, "model": "qwen", "jobs": ["elsewhere"], "runs": []}
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"cells": [cell, other]}), encoding="utf-8")
+
+    jobs, sampled = study.manifest_jobs(manifest, "skill_only", "gpt")
+    assert [(j.path, j.base_k, j.base_n) for j in jobs] == [(job, 7, 30)]
+    assert sampled == {run.resolve()}
+    assert study.manifest_jobs(manifest, "standard", "gpt") == ([], set())

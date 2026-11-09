@@ -1,5 +1,5 @@
-"""Build the SWE-bench benign and pair images of the 8 in-scope task pairs for one injection
-condition (driver: dataset_v1_eval.sh build-images).
+"""Build the SWE-bench benign and pair images of the 8 in-scope task pairs (or --pairs) for one
+injection condition (driver: dataset_v1_eval.sh build-images).
 
 The injection is written into the image at build time, and non-default conditions get their own
 tags (siren-swebench-benign:<instance>__skill_only, ...), so the images of one condition can be
@@ -37,7 +37,7 @@ TASK_PAIRS = (
 )
 
 
-async def build(condition: str, rebuild: bool) -> None:
+async def build(condition: str, rebuild: bool, pairs: list[str]) -> None:
     config = SwebenchDatasetConfig(
         enable_source_injection=condition == "standard", enable_skill_injection=True
     )
@@ -45,7 +45,7 @@ async def build(condition: str, rebuild: bool) -> None:
     specs = get_image_build_specs("swebench", config, ".siren-docker-cache/swebench")
     derived = {spec.tag for spec in specs if isinstance(spec, DerivedImageSpec)}
     wanted: set[str] = set()
-    for pair in TASK_PAIRS:
+    for pair in pairs:
         instance, task = pair.split(":")
         wanted.add(get_benign_image_tag(instance, variant=variant))
         # a pair image exists only for malicious tasks that modify the benign image
@@ -87,8 +87,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--condition", choices=("standard", "skill_only"), required=True)
     parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument(
+        "--pairs", nargs="+", default=list(TASK_PAIRS), help="task ids (default: the 8 in scope)"
+    )
     args = parser.parse_args()
-    asyncio.run(build(args.condition, args.rebuild))
+    asyncio.run(build(args.condition, args.rebuild, args.pairs))
 
 
 if __name__ == "__main__":
