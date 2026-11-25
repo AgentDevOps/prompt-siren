@@ -14,8 +14,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import end_to_end as e2e
 import recovery_context as rc
@@ -83,7 +85,10 @@ class Group:
         )
 
 
-def groups_for(name: str, args: argparse.Namespace) -> dict[str, Group]:
+def groups_for(
+    name: str, args: argparse.Namespace, keep: Callable[[Path], bool] | None = None
+) -> dict[str, Group]:
+    """Groups of the cell's flagged firings; with keep, only runs whose folder it accepts."""
     cell = e2e.Cell(name, args)
     decisions = json.loads((cell.out(args) / "decisions.json").read_text())
     labels = cell.study.labels()
@@ -92,29 +97,43 @@ def groups_for(name: str, args: argparse.Namespace) -> dict[str, Group]:
     for key, entry in decisions.items():
         if not entry.get("flagged") or key not in cell.outcome:
             continue
-        item = (key, entry["step"])
-        control = e2e.arm(rc.cut_dir(cell.study, state, item, e2e.CONTROL))
-        warned = e2e.arm(rc.cut_dir(cell.study, state, item, e2e.WARNED))
-        if not control[0] or not warned[0]:
+        if keep is not None and not keep(cell.study.sources.runs[key]):
             continue
-        job = cell.study.sources.job_of[key]
-        values = (cell.study.pair(key), job.base_k / job.base_n, control, warned)
-        names = ["all flagged firings"]
-        if cell.outcome[key][0]:
-            names.append("attack-succeeded runs")
-        else:
-            label = labels.get(item)
-            verdict = label.verdict if label is not None else "unlabelled"
-            names.append("attack-failed runs")
-            names.append(
-                {
-                    "dangerous": "attack-failed, firing labelled dangerous",
-                    "safe": "attack-failed, firing labelled safe",
-                }.get(verdict, "attack-failed, firing uncertain or unlabelled")
-            )
-        for group in names:
-            groups[group].add(*values)
+        add_firing(groups, cell, labels, (key, entry["step"]), state)
     return groups
+
+
+def add_firing(
+    groups: dict[str, Group],
+    cell: e2e.Cell,
+    labels: dict[Any, Any],
+    item: tuple[str, int],
+    state: argparse.Namespace,
+) -> None:
+    """Adds a flagged firing's replays (checkpoints under state) to its groups; skips it until
+    both arms have a completed replay."""
+    key = item[0]
+    control = e2e.arm(rc.cut_dir(cell.study, state, item, e2e.CONTROL))
+    warned = e2e.arm(rc.cut_dir(cell.study, state, item, e2e.WARNED))
+    if not control[0] or not warned[0]:
+        return
+    job = cell.study.sources.job_of[key]
+    values = (cell.study.pair(key), job.base_k / job.base_n, control, warned)
+    names = ["all flagged firings"]
+    if cell.outcome[key][0]:
+        names.append("attack-succeeded runs")
+    else:
+        label = labels.get(item)
+        verdict = label.verdict if label is not None else "unlabelled"
+        names.append("attack-failed runs")
+        names.append(
+            {
+                "dangerous": "attack-failed, firing labelled dangerous",
+                "safe": "attack-failed, firing labelled safe",
+            }.get(verdict, "attack-failed, firing uncertain or unlabelled")
+        )
+    for group in names:
+        groups[group].add(*values)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,9 +143,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--e2e-out", type=Path, default=Path("truncated/end_to_end"))
     parser.add_argument("--state", type=Path, default=Path("truncated/inserted_context/end_to_end"))
     parser.add_argument("--out", type=Path, default=Path("truncated/warning_effect/report.md"))
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="labels with the screening rule (census_label.sh): 5 replays, candidates up to 10",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     e2e_args = argparse.Namespace(
-        manifest=args.manifest, out=args.e2e_out, state=args.state, replay_concurrency=1
+        manifest=args.manifest,
+        out=args.e2e_out,
+        state=args.state,
+        replay_concurrency=1,
+        screen=args.screen,
     )
     header = [
         "| Flagged firings | Firings | Task pairs | Baseline ASR (fresh runs) | Replayed ASR, "

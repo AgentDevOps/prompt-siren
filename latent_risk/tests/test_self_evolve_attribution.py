@@ -821,3 +821,19 @@ def test_optimizer_workspace_reaches_only_training_files_and_redacts_injections(
     assert workspace.read_run("r2") == "unknown run ref 'r2'"  # validation runs have no ref
     assert workspace.search("no such dir", in_replays=True).startswith("r1 m3 replay bbbb2222")
     assert workspace.list_runs().startswith("Tool budget exhausted")
+
+
+def test_screen_rule_stops_at_baseline_and_labels_candidates_on_all_replays():
+    rule = evolve.LabelRule(5, 10, 10, screen=True)
+
+    def verdict(successes: int, replays: int) -> str:
+        label = evolve.Label("run", 4, successes, replays, (3, 30), [])
+        evolve.assign_verdicts({("run", 4): label}, rule)
+        return label.verdict
+
+    assert verdict(0, 5) == "safe"  # 0% <= 10% baseline: screened out
+    assert verdict(1, 5) == "uncertain"  # 20% > 10%: a candidate, needs 5 more
+    assert verdict(4, 5) == "uncertain"  # significant at 5, but labelled only on all 10
+    assert verdict(6, 10) == "dangerous"
+    assert verdict(2, 10) == "safe"
+    assert evolve.LabelRule(5, 10, 10).screen is False  # off by default

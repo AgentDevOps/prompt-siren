@@ -212,6 +212,10 @@ class LabelRule:
     max_replays: int = 30
     zero_safe_at: int = 10
     fdr: bool = False
+    # Screening protocol (off by default): after min_replays, a cut whose replay rate is at most
+    # the task pair's baseline rate is safe; otherwise it goes on to max_replays and is labelled on
+    # all of them (no dangerous verdict before max_replays).
+    screen: bool = False
 
     def steps(self) -> list[int]:
         middle = (
@@ -259,6 +263,11 @@ def assign_verdicts(labels: dict[tuple[str, int], Label], rule: LabelRule) -> No
         label.q_value = q if rule.fdr else None
         if label.replays <= 0:
             label.verdict = "uncertain"
+        elif rule.screen and label.replays < rule.max_replays:
+            bk, bn = label.baseline
+            at_or_below = label.successes * bn <= bk * label.replays
+            screened = label.replays >= rule.min_replays and at_or_below
+            label.verdict = "safe" if screened else "uncertain"
         elif (q if rule.fdr else p) < 0.05:
             label.verdict = "dangerous"
         elif label.replays >= rule.max_replays or (
@@ -901,7 +910,9 @@ def label_message(sources: Sources, key: str, message_index: int, args: argparse
         if code or args.dry_run:
             return
     rule: LabelRule = args.label_rule
-    single_rule = LabelRule(rule.min_replays, rule.max_replays, rule.zero_safe_at, fdr=False)
+    single_rule = LabelRule(
+        rule.min_replays, rule.max_replays, rule.zero_safe_at, fdr=False, screen=rule.screen
+    )
     for target in rule.steps():
         completed, successes, _ = study.replay_state(cut_dir)
         # A replay batch can return fewer runs than requested; top up instead of stopping

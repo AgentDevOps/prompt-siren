@@ -286,7 +286,22 @@ def report(args: argparse.Namespace) -> None:
     print(out.read_text())
 
 
-def section(title: str, rows: dict[str, list[Any]], agreement: dict[str, int]) -> list[str]:
+AGREEMENT_ORDER = (
+    "same message",
+    "gate earlier",
+    "gate later",
+    "only R1 fired",
+    "only the gate fired",
+    "neither fired",
+)
+
+
+def section(
+    title: str,
+    rows: dict[str, list[Any]],
+    agreement: dict[str, int],
+    order: tuple[str, ...] = AGREEMENT_ORDER,
+) -> list[str]:
     names = list(rows)
 
     def cell_value(method: str, metric: str) -> str:
@@ -344,14 +359,6 @@ def section(title: str, rows: dict[str, list[Any]], agreement: dict[str, int]) -
     lines += [
         f"| {text} | " + " | ".join(cell_value(n, m) for n in names) + " |" for m, text in metrics
     ]
-    order = (
-        "same message",
-        "gate earlier",
-        "gate later",
-        "only R1 fired",
-        "only the gate fired",
-        "neither fired",
-    )
     lines += [
         "",
         "Firing points compared, per run: "
@@ -373,6 +380,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--r1", type=Path, default=Path("truncated/end_to_end_swap"))
     parser.add_argument("--out", type=Path, default=Path("truncated/intentguard_baseline"))
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="labels with the screening rule (census_label.sh): 5 replays, candidates up to 10",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     args.state = args.out / "unused"  # e2e.Cell's interface; nothing is written there
     args.replay_concurrency = 1

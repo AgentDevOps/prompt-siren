@@ -15,6 +15,8 @@
 # Environment (defaults in brackets): OUT [truncated/prevalence_baselines]
 #   STATE [truncated/self_evolve_td] (frozen v1, splits)  SAMPLE_PER_PAIR [6] (first-reply, random)
 #   METHODS [all]  SEED [0]  MIN_REPLAYS [5]  MAX_REPLAYS [10]  ZERO_SAFE_AT [10]
+#   SCREEN [0; 1: screening rule, MIN_REPLAYS first, at or below the pair's baseline rate is safe,
+#   otherwise MAX_REPLAYS and the label on all of them]
 #   REPLAY_CONCURRENCY [3]  LABEL_CONCURRENCY [1]  ENV_FILE [.env]
 #   REUSE_IMAGES [0]: 1 makes replay jobs use the existing SWE-bench images instead of rebuilding
 #   them. Only safe when the images on disk were built for the same injection condition: the image
@@ -53,6 +55,7 @@ ARGS=(--out "${OUT:-truncated/prevalence_baselines}" --state "${STATE:-truncated
   --zero-safe-at "${ZERO_SAFE_AT:-10}" --replay-concurrency "${REPLAY_CONCURRENCY:-3}"
   --label-concurrency "${LABEL_CONCURRENCY:-1}" "${V2[@]}")
 [ "${REUSE_IMAGES:-0}" = 1 ] && ARGS+=(--reuse-images)
+[ "${SCREEN:-0}" = 1 ] && ARGS+=(--screen)
 # shellcheck disable=SC2206  # space-separated list
 [ -n "${METHODS:-}" ] && ARGS+=(--methods $METHODS)
 PY=("${UV[@]}" python latent_risk/experiments/prevalence_baselines.py)

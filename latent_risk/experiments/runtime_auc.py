@@ -96,6 +96,8 @@ def study_for(cell: str, args: argparse.Namespace, command: str) -> pb.Study:
         str(args.label_concurrency),
         "--reuse-images",
     ]
+    if args.screen:
+        argv.append("--screen")
     return pb.Study(pb.parse_args(argv))
 
 
@@ -314,6 +316,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-replays", type=int, default=10)
     parser.add_argument("--replay-concurrency", type=int, default=5)
     parser.add_argument("--label-concurrency", type=int, default=4)
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="screening rule (prevalence_baselines.py --screen): min-replays first; at or below "
+        "the pair's baseline rate is safe, otherwise more replays up to max-replays",
+    )
     parser.add_argument("--bootstrap", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", type=Path, default=Path("truncated/runtime_auc"))

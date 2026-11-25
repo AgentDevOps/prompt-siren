@@ -61,6 +61,21 @@ def _get_model_name(model_name: str | KnownModelName) -> str:
     # Zhipu's GLM models (e.g. openrouter/z-ai/glm-5.3-flash)
     if "glm" in model_name:
         return "GLM"
+    # candidate agent models of the model screening (latent_risk/experiments/model_screen.sh)
+    if "mistral" in model_name:
+        return "Mistral"
+    if "minimax" in model_name:
+        return "MiniMax"
+    if "mimo" in model_name:
+        return "MiMo"
+    if "nemotron" in model_name:
+        return "Nemotron"
+    if "tencent" in model_name or "hunyuan" in model_name:
+        return "Hunyuan"
+    if "stepfun" in model_name:
+        return "Step"
+    if "bytedance" in model_name:
+        return "Seed"
     raise UnknownModelError(f"Unknown model error: '{model_name}'")
 
 

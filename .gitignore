@@ -60,6 +60,8 @@ venv/
 /scripts/*.sh
 
 # Local analysis data and working directories
+/jobs_logs/
+/*.pdf
 /open_coding/
 /open_coding_arian/
 /papers/

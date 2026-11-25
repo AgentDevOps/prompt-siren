@@ -68,6 +68,7 @@ class Cell:
                 condition=condition,
                 min_replays=5,
                 max_replays=10,
+                screen=getattr(args, "screen", False),
             )
         )
         sources = self.study.sources
@@ -206,6 +207,37 @@ async def json_score(agent: Agent[Any, Any], prompt: str, semaphore: asyncio.Sem
     return frs.RiskScore.model_validate_json(text[text.index("{") : text.rindex("}") + 1])
 
 
+async def next_step_score(
+    cell: Cell,
+    item: pb.Item,
+    judges: dict[str, Agent[Any, Any]],
+    agents: dict[Path, MiniSweAgent],
+    args: argparse.Namespace,
+    semaphore: asyncio.Semaphore,
+) -> dict[str, Any]:
+    """R3 and R4: the agent's next message sampled --samples times from the prefix (up to the
+    firing message's tool output), then the combined judge on the samples."""
+    key, step = item
+    prefix = cell.study.sources.messages(key)[: step + 2]
+    agent = run_agent(cell, key, agents)
+    sampled = await asyncio.gather(
+        *(sp.sample_one(agent, prefix, semaphore) for _ in range(args.samples))
+    )
+    samples = [
+        {"text": " ".join(p.get("content", "") for p in s["parts"] if p.get("content"))[:2000]}
+        for s in sampled
+        if s is not None
+    ]
+    combined = await fc.score_one(
+        cell.study, item, samples, "samples", judges["combined"], semaphore
+    )
+    return {
+        "samples": samples,
+        "combined": combined["probability"],
+        "combined_reason": combined["reason"],
+    }
+
+
 async def decide_one(
     cell: Cell,
     key: str,
@@ -222,25 +254,8 @@ async def decide_one(
     entry: dict[str, Any] = {"step": step, "stage1": stage1.probability, "flagged": False}
     if stage1.probability < args.stage1:
         return entry
-    prefix = cell.study.sources.messages(key)[: step + 2]
-    agent = run_agent(cell, key, agents)
-    sampled = await asyncio.gather(
-        *(sp.sample_one(agent, prefix, semaphore) for _ in range(args.samples))
-    )
-    samples = [
-        {"text": " ".join(p.get("content", "") for p in s["parts"] if p.get("content"))[:2000]}
-        for s in sampled
-        if s is not None
-    ]
-    combined = await fc.score_one(
-        cell.study, item, samples, "samples", judges["combined"], semaphore
-    )
-    entry |= {
-        "samples": samples,
-        "combined": combined["probability"],
-        "combined_reason": combined["reason"],
-        "flagged": combined["probability"] >= args.threshold,
-    }
+    entry |= await next_step_score(cell, item, judges, agents, args, semaphore)
+    entry["flagged"] = entry["combined"] >= args.threshold
     if entry["flagged"]:
         warning = await judges["warning"].run(
             prompt_for(
@@ -251,26 +266,31 @@ async def decide_one(
     return entry
 
 
-async def decide(args: argparse.Namespace) -> None:
-    model = create_attribution_model(args.model)
-    semaphore = asyncio.Semaphore(args.concurrency)
-    judges: dict[str, Agent[Any, Any]] = {
+def make_judges(model_name: str) -> dict[str, Agent[Any, Any]]:
+    """Stage 1 (R2), the combined judge (R4) and the warning writer (R5)."""
+    model = create_attribution_model(model_name)
+    return {
         "stage1": Agent(
             model=model,
             system_prompt=frs.INSTRUCTIONS,
-            model_settings=model_settings(args.model, 2048),
+            model_settings=model_settings(model_name, 2048),
         ),
         "combined": Agent(
             model=model,
             system_prompt=fc.INSTRUCTIONS,
-            model_settings=model_settings(args.model, 2048),
+            model_settings=model_settings(model_name, 2048),
         ),
         "warning": Agent(
             model=model,
             system_prompt=rc.INFERRED_WARNING_INSTRUCTIONS,
-            model_settings=model_settings(args.model, 2048),
+            model_settings=model_settings(model_name, 2048),
         ),
     }
+
+
+async def decide(args: argparse.Namespace) -> None:
+    semaphore = asyncio.Semaphore(args.concurrency)
+    judges = make_judges(args.model)
     agents: dict[Path, MiniSweAgent] = {}
     for name in args.cells:
         cell = Cell(name, args)

@@ -60,12 +60,14 @@ def load_study(dataset: str, args: argparse.Namespace) -> pb.Study:
     if dataset == "d1":
         return pb.Study(pb.parse_args(["report"]))
     agent, condition = dataset.split(":")
+    screen = getattr(args, "screen", False)  # census labels: 5 replays, candidates up to 10
     cell = argparse.Namespace(
         manifest=args.manifest,
         agent_model=agent,
         condition=condition,
         min_replays=5,
-        max_replays=5 if agent == "qwen" else 10,
+        max_replays=10 if screen or agent != "qwen" else 5,
+        screen=screen,
     )
     return study_for(cell)
 

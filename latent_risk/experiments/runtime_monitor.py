@@ -54,6 +54,7 @@ def study_for(args: argparse.Namespace) -> pb.Study:
                 str(args.min_replays),
                 "--max-replays",
                 str(args.max_replays),
+                *(["--screen"] if getattr(args, "screen", False) else []),
             ]
         )
     )

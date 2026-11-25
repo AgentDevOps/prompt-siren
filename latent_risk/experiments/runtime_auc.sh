@@ -16,6 +16,7 @@
 #   RUNTIME [truncated/end_to_end_swap]  CELLS [gpt:skill_only gpt:standard]  STAGE1 [10]
 #   MIN_REPLAYS [5]  MAX_REPLAYS [10]  REPLAY_CONCURRENCY [5]  LABEL_CONCURRENCY [4]
 #   OUT [truncated/runtime_auc]  ENV_FILE [.env]
+#   SCREEN [0; 1: screening rule, MIN_REPLAYS first, at or below the pair's baseline is safe]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ENV_FILE="${ENV_FILE:-.env}"
@@ -34,6 +35,7 @@ ARGS=(--manifest "${MANIFEST:-rq3/dataset_v2/manifest_swap.json}"
   --stage1 "${STAGE1:-10}" --min-replays "${MIN_REPLAYS:-5}" --max-replays "${MAX_REPLAYS:-10}"
   --replay-concurrency "${REPLAY_CONCURRENCY:-5}" --label-concurrency "${LABEL_CONCURRENCY:-4}"
   --out "$OUT")
+[ "${SCREEN:-0}" = 1 ] && ARGS+=(--screen)
 PY=("${UV[@]}" python latent_risk/experiments/runtime_auc.py)
 case "${1:-}" in
   cost|report) "${PY[@]}" "$1" "${ARGS[@]}" ;;

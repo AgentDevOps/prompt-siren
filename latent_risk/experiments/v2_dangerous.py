@@ -78,8 +78,8 @@ def split(row: Row) -> str:
     return f"{row.first} / {row.deviations_safe} / {other}"
 
 
-def cell_rows(name: str, manifest: Path) -> dict[str, Row]:
-    study = frs.load_study(name, argparse.Namespace(manifest=manifest))
+def cell_rows(name: str, manifest: Path, screen: bool = False) -> dict[str, Row]:
+    study = frs.load_study(name, argparse.Namespace(manifest=manifest, screen=screen))
     rows: dict[str, Row] = {}
     for key in study.sources.runs:
         job = study.sources.job_of[key]
@@ -117,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, default=Path("rq3/dataset_v2/manifest_swap.json"))
     parser.add_argument("--cells", nargs="+", default=list(CELLS))
     parser.add_argument("--out", type=Path, default=Path("truncated/v2_dangerous/report.md"))
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="labels with the screening rule (census_label.sh): 5 replays, candidates up to 10",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     lines = [
         "# Dangerous messages in dataset v2",
@@ -129,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         "replayed ASR pooled over the pair's dangerous messages (range per message).",
         "",
     ]
-    cells = {name: cell_rows(name, args.manifest) for name in args.cells}
+    cells = {name: cell_rows(name, args.manifest, args.screen) for name in args.cells}
     lines += [
         "## Per cell",
         "",

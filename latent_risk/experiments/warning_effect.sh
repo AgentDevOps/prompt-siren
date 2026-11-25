@@ -7,9 +7,12 @@
 #
 # Environment (defaults in brackets): MANIFEST [rq3/dataset_v2/manifest.json]
 #   E2E_OUT [truncated/end_to_end]  STATE [truncated/inserted_context/end_to_end]
+#   OUT [truncated/warning_effect/report.md]  SCREEN [0; 1: labels with the screening rule]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 export PYTHONPATH="latent_risk/experiments:latent_risk${PYTHONPATH:+:$PYTHONPATH}"
 command -v uv >/dev/null && PY=(uv run python) || PY=(.venv/bin/python)
-"${PY[@]}" latent_risk/experiments/warning_effect.py --manifest "${MANIFEST:-rq3/dataset_v2/manifest.json}" \
-  --e2e-out "${E2E_OUT:-truncated/end_to_end}" --state "${STATE:-truncated/inserted_context/end_to_end}"
+ARGS=(--manifest "${MANIFEST:-rq3/dataset_v2/manifest.json}" --e2e-out "${E2E_OUT:-truncated/end_to_end}"
+  --state "${STATE:-truncated/inserted_context/end_to_end}" --out "${OUT:-truncated/warning_effect/report.md}")
+[ "${SCREEN:-0}" = 1 ] && ARGS+=(--screen)
+"${PY[@]}" latent_risk/experiments/warning_effect.py "${ARGS[@]}"

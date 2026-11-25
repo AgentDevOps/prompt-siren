@@ -14,6 +14,9 @@
 #               glm   Z.ai GLM-5.3 Flash via OpenRouter, likewise, pinned to Z.ai's own fp8
 #                     endpoint (mini_swe_glm_openrouter.yaml)
 #                     (mini_swe_muse_openrouter.yaml)
+#               custom  any other model (model_screen.sh): the gpt settings (gpt5.yaml, 60 steps)
+#                     with the mini-swe overlay CUSTOM_OVERLAY (model name, pinned provider); job
+#                     folders start with CUSTOM_PREFIX; CUSTOM_OPENROUTER=1 requires OPENROUTER_API_KEY
 #
 # Concurrent jobs (e.g. one per model) are safe with USE_CACHE=true once every image they need
 # exists (dataset_v1_eval.sh build-images, both conditions): containers and networks get unique
@@ -146,7 +149,15 @@ model_settings() {  # sets PREFIX, SPEC, OVERRIDES, EXTRA, DEFAULT_CONCURRENCY f
       EXTRA=(+agent.config.max_steps=60)
       DEFAULT_CONCURRENCY=4
       ;;
-    *) echo "MODEL must be gpt, qwen, deepseek, muse or glm" >&2; exit 2 ;;
+    custom)
+      : "${CUSTOM_PREFIX:?set CUSTOM_PREFIX}" "${CUSTOM_OVERLAY:?set CUSTOM_OVERLAY}"
+      PREFIX="$CUSTOM_PREFIX"
+      SPEC="$GPT_SPEC"
+      OVERRIDES=("$CUSTOM_OVERLAY")
+      EXTRA=(+agent.config.max_steps=60)
+      DEFAULT_CONCURRENCY=4
+      ;;
+    *) echo "MODEL must be gpt, qwen, deepseek, muse, glm or custom" >&2; exit 2 ;;
   esac
 }
 
@@ -201,7 +212,8 @@ check_server() {
       "uses. Rerun with USE_CACHE=true (after build-images for both conditions)." >&2
     exit 1
   fi
-  if { [ "$MODEL" = deepseek ] || [ "$MODEL" = muse ] || [ "$MODEL" = glm ]; } && [ -z "${OPENROUTER_API_KEY:-}" ] \
+  if { [ "$MODEL" = deepseek ] || [ "$MODEL" = muse ] || [ "$MODEL" = glm ] \
+    || { [ "$MODEL" = custom ] && [ "${CUSTOM_OPENROUTER:-0}" = 1 ]; }; } && [ -z "${OPENROUTER_API_KEY:-}" ] \
     && ! grep -q '^OPENROUTER_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
     echo "no OPENROUTER_API_KEY in the environment or $ENV_FILE" >&2
     exit 1
@@ -260,6 +272,8 @@ run_pair() {
     specs+=",\"$override\""
   done
   # same settings as benchmark_pair.sh (the current gpt-5.6-luna study) except model and condition
+  local log
+  log="$(mktemp)"
   "${UV[@]}" prompt-siren jobs start attack \
     +dataset=swebench +attack=agentdojo_important_instructions +sandbox_manager=local-docker \
     agent.type=mini_swe "+agent.config.config_specs=[$specs]" \
@@ -269,9 +283,18 @@ run_pair() {
     execution.concurrency="${CONCURRENCY:-$DEFAULT_CONCURRENCY}" \
     telemetry.trace_console=false telemetry.otel_endpoint=null \
     dataset.config.enable_source_injection="$source" dataset.config.enable_skill_injection=true \
-    dataset.config.use_cache="${USE_CACHE:-false}" trajectory_labeling.method=none "${EXTRA[@]}" || rc=$?
+    dataset.config.use_cache="${USE_CACHE:-false}" trajectory_labeling.method=none "${EXTRA[@]}" \
+    | tee "$log" || rc=$?  # pipefail: rc is the job's status
   after="$(ls -d jobs/"$PREFIX"* 2>/dev/null | sort || true)"
   new="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep . || true)"
+  if [ "$(printf '%s\n' "$new" | grep -c .)" -gt 1 ]; then
+    # another job of the same model started meanwhile (e.g. the other condition in a second
+    # terminal): take the job directory this job printed
+    local own
+    own="$(sed -n 's/^Job directory: //p' "$log" | tail -1)"
+    if [ -n "$own" ] && printf '%s\n' "$new" | grep -qxF "$own"; then new="$own"; fi
+  fi
+  rm -f "$log"
   if [ "$(printf '%s\n' "$new" | grep -c .)" -ne 1 ]; then
     echo "could not identify the new job under jobs/ (found: ${new:-none}); move it to $target/ by hand" >&2
     exit 1

@@ -10,6 +10,7 @@
 #   CELLS [gpt:skill_only gpt:standard]  R1 [truncated/end_to_end_swap]  MODEL [gpt-5.6-luna]
 #   MALICIOUS [0: 1 adds the malicious-intent check]  CONCURRENCY [8]
 #   OUT [truncated/intentguard_baseline, or ..._malicious with MALICIOUS=1]  ENV_FILE [.env]
+#   SCREEN [0; 1: labels with the screening rule of census_label.sh]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ENV_FILE="${ENV_FILE:-.env}"
@@ -29,6 +30,7 @@ ARGS=(--manifest "${MANIFEST:-rq3/dataset_v2/manifest_swap.json}"
   --cells ${CELLS:-gpt:skill_only gpt:standard} --r1 "${R1:-truncated/end_to_end_swap}"
   --model "${MODEL:-gpt-5.6-luna}" --concurrency "${CONCURRENCY:-8}" --out "$OUT")
 [ "${MALICIOUS:-0}" = 1 ] && ARGS+=(--malicious)
+[ "${SCREEN:-0}" = 1 ] && ARGS+=(--screen)
 PY=("${UV[@]}" python latent_risk/experiments/intentguard_baseline.py)
 case "${1:-}" in
   report) "${PY[@]}" report "${ARGS[@]}" ;;

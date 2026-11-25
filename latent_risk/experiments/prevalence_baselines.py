@@ -76,7 +76,9 @@ class Study:
         self.sources = se.Sources(self.local)
         se.prepare_split(self.sources, self.local)
         self.local.state = args.out  # new replays go to <out>/replays
-        self.local.label_rule = se.LabelRule(args.min_replays, args.max_replays, args.zero_safe_at)
+        self.local.label_rule = se.LabelRule(
+            args.min_replays, args.max_replays, args.zero_safe_at, screen=args.screen
+        )
         self.runs = sorted(key for key in self.sources.runs if self.sources.chain(key))
         self.threshold = se.frozen_threshold(args.state, "v1")
         self.scores: dict[Item, int] = {}
@@ -391,6 +393,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--min-replays", type=int, default=5)
     parser.add_argument("--max-replays", type=int, default=10)
     parser.add_argument("--zero-safe-at", type=int, default=10)
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="screening rule: min-replays first; at or below the baseline rate is safe, otherwise "
+        "max-replays and the label on all of them",
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--replay-concurrency", type=int, default=3)
     parser.add_argument(
